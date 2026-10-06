@@ -1,0 +1,15 @@
+{
+  "name": "homebase",
+  "description": "Homebase plugins for Claude Code: the Homebase skill, MCP server and slash commands.",
+  "owner": { "name": "Feeble" },
+  "plugins": [
+    {
+      "name": "homebase",
+      "source": "./plugins/homebase",
+      "description": "Find, fetch, upload and organise your team's assets in Homebase.",
+      "version": "0.1.0",
+      "category": "productivity",
+      "keywords": ["assets", "brand", "dam", "library"]
+    }
+  ]
+}

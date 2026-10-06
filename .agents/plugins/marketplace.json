@@ -1,0 +1,12 @@
+{
+  "name": "homebase",
+  "interface": { "displayName": "Homebase" },
+  "plugins": [
+    {
+      "name": "homebase",
+      "source": { "source": "local", "path": "./plugins/homebase" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" },
+      "category": "Productivity"
+    }
+  ]
+}

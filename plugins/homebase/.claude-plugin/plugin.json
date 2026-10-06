@@ -1,0 +1,23 @@
+{
+  "name": "homebase",
+  "displayName": "Homebase",
+  "version": "0.1.0",
+  "description": "Homebase, your team's asset library: find, preview, upload, tag and organise brand and campaign assets. Adds the Homebase skill, the Homebase MCP server, a bundled homebase CLI, and /homebase:find, /homebase:upload, /homebase:connect and /homebase:status.",
+  "author": {
+    "name": "Feeble"
+  },
+  "keywords": [
+    "assets",
+    "brand",
+    "dam",
+    "library",
+    "marketing",
+    "files"
+  ],
+  "mcpServers": {
+    "homebase": {
+      "type": "http",
+      "url": "https://next-caribou-11.convex.site/mcp"
+    }
+  }
+}
