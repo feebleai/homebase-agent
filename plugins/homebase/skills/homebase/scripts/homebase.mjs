@@ -220,6 +220,9 @@ function optionLine(name, spec) {
 
 // src/constants.ts
 var DEFAULT_API_URL = "https://next-caribou-11.convex.site";
+var DEFAULT_CLIENT_ID = "https://homebase-delta-seven.vercel.app/oauth/homebase-cli.json";
+var REFRESH_SKEW_MS = 5 * 60 * 1e3;
+var LOGIN_TIMEOUT_MS = 10 * 60 * 1e3;
 var CLI_VERSION = "0.1.0";
 var CLIENT_NAME = "Homebase CLI";
 var USER_AGENT = `homebase-cli/${CLI_VERSION} (node ${process.version}; ${process.platform})`;
@@ -243,85 +246,9 @@ function mcpUrl(api) {
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
-// src/api.ts
-var realSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
-var Api = class {
-  baseUrl;
-  token;
-  fetchImpl;
-  sleep;
-  onWait;
-  constructor(opts) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
-    this.token = opts.token;
-    this.fetchImpl = opts.fetch ?? ((input, init) => fetch(input, init));
-    this.sleep = opts.sleep ?? realSleep;
-    this.onWait = opts.onWait;
-  }
-  url(path, query) {
-    const url = new URL(this.baseUrl + path);
-    for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== void 0) url.searchParams.set(key, String(value));
-    }
-    return url.toString();
-  }
-  async request(method, path, opts = {}) {
-    const needsAuth = opts.auth !== false;
-    if (needsAuth && !this.token) {
-      throw new CliError("Not logged in to Homebase. Run `homebase login` (or set HOMEBASE_TOKEN), then retry.", {
-        exitCode: EXIT.auth,
-        code: "not_logged_in"
-      });
-    }
-    const headers = { "User-Agent": USER_AGENT, Accept: "application/json" };
-    if (needsAuth) headers.Authorization = `Bearer ${this.token}`;
-    if (opts.body !== void 0) headers["Content-Type"] = "application/json";
-    for (let attempt = 0; ; attempt++) {
-      let response;
-      try {
-        response = await this.fetchImpl(this.url(path, opts.query), {
-          method,
-          headers,
-          body: opts.body === void 0 ? void 0 : JSON.stringify(opts.body)
-        });
-      } catch (error2) {
-        const reason = error2 instanceof Error ? error2.cause instanceof Error ? error2.cause.message : error2.message : String(error2);
-        throw new CliError(`Couldn't reach Homebase at ${this.baseUrl} (${reason}). Check the network or --api, then retry.`, {
-          exitCode: EXIT.other,
-          code: "network_error"
-        });
-      }
-      const text = await response.text();
-      let body = text;
-      try {
-        body = text ? JSON.parse(text) : null;
-      } catch {
-      }
-      if (response.ok) return body;
-      const error = fromServer(response.status, body);
-      const wait = error.server?.retry_after_s ?? Number(response.headers.get("Retry-After") ?? NaN);
-      if (response.status === 429 && error.code === "rate_limited" && attempt < 2 && Number.isFinite(wait) && wait <= MAX_AUTO_RETRY_S) {
-        this.onWait?.(wait, error.message);
-        await this.sleep(Math.max(1, wait) * 1e3);
-        continue;
-      }
-      throw error;
-    }
-  }
-  get(path, query) {
-    return this.request("GET", path, { query });
-  }
-  post(path, body = {}) {
-    return this.request("POST", path, { body });
-  }
-  patch(path, body) {
-    return this.request("PATCH", path, { body });
-  }
-};
-
 // src/credentials.ts
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 var PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
@@ -340,44 +267,53 @@ function onPath(command) {
   const result = spawnSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" });
   return result.status === 0;
 }
-var macKeychain = {
-  name: "macOS Keychain",
-  available: () => process.platform === "darwin" && existsSync("/usr/bin/security"),
-  get(account) {
-    const result = spawnSync("/usr/bin/security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"], { encoding: "utf8" });
-    if (result.status !== 0) return null;
-    return result.stdout.trim() || null;
-  },
-  set(account, label, secret) {
-    if (!/^[\w.:-]+$/.test(secret) || /"/.test(label)) return false;
-    const command = `add-generic-password -U -s ${KEYCHAIN_SERVICE} -a "${account}" -l "${label}" -w "${secret}"
+function keychainService(env = process.env) {
+  const custom = env.HOMEBASE_KEYCHAIN_SERVICE;
+  return custom && /^[\w.-]{1,64}$/.test(custom) ? custom : KEYCHAIN_SERVICE;
+}
+function macKeychain(service = keychainService()) {
+  return {
+    name: "macOS Keychain",
+    available: () => process.platform === "darwin" && existsSync("/usr/bin/security"),
+    get(account) {
+      const result = spawnSync("/usr/bin/security", ["find-generic-password", "-s", service, "-a", account, "-w"], { encoding: "utf8" });
+      if (result.status !== 0) return null;
+      return result.stdout.trim() || null;
+    },
+    set(account, label, secret) {
+      if (!/^[\w.:-]+$/.test(secret) || !/^[\w .:()-]+$/.test(label) || !/^[\w.:-]+$/.test(account)) return false;
+      const command = `add-generic-password -U -s ${service} -a "${account}" -l "${label}" -w "${secret}"
 `;
-    const result = spawnSync("/usr/bin/security", ["-i"], { input: command, encoding: "utf8" });
-    return result.status === 0 && this.get(account) === secret;
-  },
-  delete(account) {
-    spawnSync("/usr/bin/security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account], { stdio: "ignore" });
-  }
-};
-var secretTool = {
-  name: "Secret Service",
-  available: () => process.platform === "linux" && Boolean(process.env.DBUS_SESSION_BUS_ADDRESS) && onPath("secret-tool"),
-  get(account) {
-    const result = spawnSync("secret-tool", ["lookup", "service", KEYCHAIN_SERVICE, "account", account], { encoding: "utf8" });
-    if (result.status !== 0) return null;
-    return result.stdout.trim() || null;
-  },
-  set(account, label, secret) {
-    const result = spawnSync("secret-tool", ["store", "--label", label, "service", KEYCHAIN_SERVICE, "account", account], { input: secret, encoding: "utf8" });
-    return result.status === 0 && this.get(account) === secret;
-  },
-  delete(account) {
-    spawnSync("secret-tool", ["clear", "service", KEYCHAIN_SERVICE, "account", account], { stdio: "ignore" });
-  }
-};
+      const result = spawnSync("/usr/bin/security", ["-i"], { input: command, encoding: "utf8" });
+      return result.status === 0 && this.get(account) === secret;
+    },
+    delete(account) {
+      spawnSync("/usr/bin/security", ["delete-generic-password", "-s", service, "-a", account], { stdio: "ignore" });
+    }
+  };
+}
+function secretTool(service = keychainService()) {
+  return {
+    name: "Secret Service",
+    available: () => process.platform === "linux" && Boolean(process.env.DBUS_SESSION_BUS_ADDRESS) && onPath("secret-tool"),
+    get(account) {
+      const result = spawnSync("secret-tool", ["lookup", "service", service, "account", account], { encoding: "utf8" });
+      if (result.status !== 0) return null;
+      return result.stdout.trim() || null;
+    },
+    set(account, label, secret) {
+      const result = spawnSync("secret-tool", ["store", "--label", label, "service", service, "account", account], { input: secret, encoding: "utf8" });
+      return result.status === 0 && this.get(account) === secret;
+    },
+    delete(account) {
+      spawnSync("secret-tool", ["clear", "service", service, "account", account], { stdio: "ignore" });
+    }
+  };
+}
 function defaultKeychain(env = process.env) {
   if (env.HOMEBASE_NO_KEYCHAIN === "1" || env.HOMEBASE_NO_KEYCHAIN === "true") return null;
-  for (const backend of [macKeychain, secretTool]) {
+  const service = keychainService(env);
+  for (const backend of [macKeychain(service), secretTool(service)]) {
     try {
       if (backend.available()) return backend;
     } catch {
@@ -386,7 +322,7 @@ function defaultKeychain(env = process.env) {
   return null;
 }
 function writePrivate(path, value) {
-  const tmp = `${path}.${process.pid}.tmp`;
+  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
   chmodSync(tmp, 384);
   renameSync(tmp, path);
@@ -399,12 +335,35 @@ function readJsonFile(path, fallback) {
     return fallback;
   }
 }
+var BLOB_PREFIX = "hbs1.";
+function encodeSession(session) {
+  return BLOB_PREFIX + Buffer.from(JSON.stringify(session), "utf8").toString("base64url");
+}
+function decodeSecret(value, api) {
+  if (value.startsWith(BLOB_PREFIX)) {
+    try {
+      return asSession(JSON.parse(Buffer.from(value.slice(BLOB_PREFIX.length), "base64url").toString("utf8")));
+    } catch {
+      return null;
+    }
+  }
+  return value ? { api, access_token: value } : null;
+}
+function asSession(value) {
+  if (!value || typeof value !== "object") return null;
+  const raw = value;
+  if (typeof raw.api !== "string" || typeof raw.access_token !== "string" || !raw.access_token) return null;
+  return raw;
+}
+function canRefresh(session) {
+  return Boolean(session.refresh_token && session.issuer && session.client_id);
+}
 var CredentialStore = class {
   dir;
   keychain;
   constructor(opts = {}) {
-    this.dir = opts.dir ?? configDir();
-    this.keychain = opts.keychain === void 0 ? defaultKeychain() : opts.keychain;
+    this.dir = opts.dir ?? configDir(opts.env);
+    this.keychain = opts.keychain === void 0 ? defaultKeychain(opts.env) : opts.keychain;
   }
   get configPath() {
     return join(this.dir, "config.json");
@@ -414,6 +373,9 @@ var CredentialStore = class {
   }
   get pendingPath() {
     return join(this.dir, "pending-login.json");
+  }
+  lockPath(profile) {
+    return join(this.dir, `refresh-${validateProfileName(profile)}.lock`);
   }
   ensureDir() {
     mkdirSync(this.dir, { recursive: true, mode: 448 });
@@ -427,58 +389,93 @@ var CredentialStore = class {
     this.ensureDir();
     writePrivate(this.configPath, config);
   }
-  readFileTokens() {
+  readFileEntries() {
     const file = readJsonFile(this.credentialsPath, {});
-    const tokens = {};
-    for (const [key, value] of Object.entries(file.profiles ?? {})) {
-      if (typeof value?.token === "string") tokens[key] = value.token;
-    }
-    return tokens;
+    return file.profiles && typeof file.profiles === "object" ? { ...file.profiles } : {};
   }
-  writeFileTokens(tokens) {
+  writeFileEntries(entries) {
     this.ensureDir();
-    if (!Object.keys(tokens).length) {
+    if (!Object.keys(entries).length) {
       rmSync(this.credentialsPath, { force: true });
       return;
     }
-    writePrivate(this.credentialsPath, { profiles: Object.fromEntries(Object.entries(tokens).map(([key, token2]) => [key, { token: token2 }])) });
+    writePrivate(this.credentialsPath, { profiles: entries });
   }
-  /** Saves a token for a profile: keychain first, else the 0600 file. */
-  save(profile, info, token2) {
+  /** Saves a login for a profile: keychain first, else the 0600 file. */
+  saveSession(profile, info, session) {
     validateProfileName(profile);
     const account = `profile:${profile}`;
     let storage = "file";
     if (this.keychain) {
       try {
-        if (this.keychain.set(account, `Homebase CLI (${profile})`, token2)) storage = "keychain";
+        if (this.keychain.set(account, `Homebase CLI (${profile})`, encodeSession(session))) storage = "keychain";
       } catch {
         storage = "file";
       }
     }
-    const tokens = this.readFileTokens();
-    if (storage === "file") tokens[profile] = token2;
-    else delete tokens[profile];
-    this.writeFileTokens(tokens);
+    const entries = this.readFileEntries();
+    if (storage === "file") entries[profile] = { session };
+    else delete entries[profile];
+    this.writeFileEntries(entries);
     const config = this.readConfig();
-    const saved = { ...info, storage, savedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    const saved = {
+      ...info,
+      api: session.api,
+      auth: canRefresh(session) ? "oauth" : "legacy",
+      storage,
+      savedAt: config.profiles[profile]?.savedAt && config.profiles[profile]?.tokenId === info.tokenId ? config.profiles[profile].savedAt : (/* @__PURE__ */ new Date()).toISOString()
+    };
     config.profiles[profile] = saved;
     if (!config.defaultProfile || !config.profiles[config.defaultProfile]) config.defaultProfile = profile;
     this.writeConfig(config);
     return saved;
   }
-  token(profile) {
+  /** Saves a bare token (a Settings key, or an older device login) bound to `api`. */
+  save(profile, info, token2) {
+    const { api, ...rest } = info;
+    return this.saveSession(profile, rest, { api, access_token: token2, scopes: info.scopes, workspace: info.workspace });
+  }
+  /** Replaces the tokens of an existing login (after a refresh), keeping where it is stored. */
+  updateSession(profile, session) {
     const info = this.readConfig().profiles[profile];
-    if (info?.storage === "keychain" && this.keychain) {
+    if (!info) return;
+    if (info.storage === "keychain" && this.keychain) {
       try {
-        const token3 = this.keychain.get(`profile:${profile}`);
-        if (token3) return { token: token3, storage: "keychain" };
+        if (this.keychain.set(`profile:${profile}`, `Homebase CLI (${profile})`, encodeSession(session))) return;
       } catch {
       }
     }
-    const token2 = this.readFileTokens()[profile];
-    return token2 ? { token: token2, storage: "file" } : null;
+    const entries = this.readFileEntries();
+    entries[profile] = { session };
+    this.writeFileEntries(entries);
+    if (info.storage !== "file") {
+      const config = this.readConfig();
+      if (config.profiles[profile]) config.profiles[profile].storage = "file";
+      this.writeConfig(config);
+    }
   }
-  /** Forgets a profile's token everywhere. Returns what it had. */
+  /** A profile's login, or null. Old stores (a bare token) read as a legacy session. */
+  session(profile) {
+    const info = this.readConfig().profiles[profile];
+    if (!info) return null;
+    if (info.storage === "keychain" && this.keychain) {
+      try {
+        const value = this.keychain.get(`profile:${profile}`);
+        const session2 = value ? decodeSecret(value, info.api) : null;
+        if (session2) return { session: session2, storage: "keychain" };
+      } catch {
+      }
+    }
+    const entry = this.readFileEntries()[profile];
+    const session = asSession(entry?.session) ?? (typeof entry?.token === "string" && entry.token ? { api: info.api, access_token: entry.token } : null);
+    return session ? { session, storage: "file" } : null;
+  }
+  /** The profile's current access token (compatibility helper). */
+  token(profile) {
+    const stored = this.session(profile);
+    return stored ? { token: stored.session.access_token, storage: stored.storage } : null;
+  }
+  /** Forgets a profile's login everywhere. Returns what it had. */
   remove(profile) {
     const config = this.readConfig();
     const info = config.profiles[profile];
@@ -488,10 +485,10 @@ var CredentialStore = class {
       } catch {
       }
     }
-    const tokens = this.readFileTokens();
-    if (profile in tokens) {
-      delete tokens[profile];
-      this.writeFileTokens(tokens);
+    const entries = this.readFileEntries();
+    if (profile in entries) {
+      delete entries[profile];
+      this.writeFileEntries(entries);
     }
     if (info) {
       delete config.profiles[profile];
@@ -516,6 +513,470 @@ var CredentialStore = class {
   }
   clearPending() {
     rmSync(this.pendingPath, { force: true });
+  }
+  /**
+   * Runs `fn` holding a cross-process lock on the profile's refresh (an
+   * O_EXCL lock file). A lock older than LOCK_STALE_MS is taken over (its
+   * holder died). Waits up to LOCK_WAIT_MS, like Claude Code's
+   * ~/.claude/.oauth_refresh.lock.
+   */
+  async withRefreshLock(profile, fn, opts = {}) {
+    this.ensureDir();
+    const path = this.lockPath(profile);
+    const sleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+    const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
+    let fd;
+    while (fd === void 0) {
+      try {
+        fd = openSync(path, "wx", 384);
+        writeFileSync(fd, `${process.pid} ${(/* @__PURE__ */ new Date()).toISOString()}
+`);
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        try {
+          if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) {
+            rmSync(path, { force: true });
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        if (Date.now() > deadline) {
+          throw new CliError("Another homebase process is renewing this login and didn't finish. Retry in a moment.", { exitCode: EXIT.other, code: "refresh_locked" });
+        }
+        await sleep(50 + Math.floor(Math.random() * 100));
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      closeSync(fd);
+      rmSync(path, { force: true });
+    }
+  }
+};
+var LOCK_STALE_MS = 30 * 1e3;
+var LOCK_WAIT_MS = 20 * 1e3;
+
+// src/oauth.ts
+import { createHash, randomBytes } from "node:crypto";
+function origin(url) {
+  return new URL(url).origin;
+}
+function sameOrigin(a, b) {
+  try {
+    return origin(a) === origin(b);
+  } catch {
+    return false;
+  }
+}
+function defaultEndpoints(api) {
+  const base = origin(api);
+  return {
+    issuer: base,
+    authorization_endpoint: `${base}/oauth/authorize`,
+    token_endpoint: `${base}/oauth/token`,
+    revocation_endpoint: `${base}/oauth/revoke`
+  };
+}
+function endpointsForIssuer(api, issuer) {
+  if (issuer && !sameOrigin(issuer, api)) {
+    throw new CliError(`This login's issuer (${issuer}) isn't its API (${origin(api)}), so it won't be used. Run \`homebase login\` again.`, {
+      exitCode: EXIT.auth,
+      code: "issuer_mismatch"
+    });
+  }
+  return defaultEndpoints(api);
+}
+async function send(fetchImpl, url, init) {
+  let response;
+  try {
+    response = await fetchImpl(url, { ...init, redirect: "manual", headers: { "User-Agent": USER_AGENT, Accept: "application/json", ...init.headers } });
+  } catch (error) {
+    const reason = error instanceof Error ? error.cause instanceof Error ? error.cause.message : error.message : String(error);
+    throw new CliError(`Couldn't reach Homebase at ${origin(url)} (${reason}).`, { code: "network_error" });
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new CliError(`Homebase answered ${new URL(url).pathname} with a redirect, which the CLI never follows with credentials.`, { code: "unexpected_redirect", status: response.status });
+  }
+  const text = await response.text();
+  let body = text;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+  }
+  return { status: response.status, body, headers: response.headers };
+}
+async function discover(fetchImpl, api) {
+  const fallback = defaultEndpoints(api);
+  let result;
+  try {
+    result = await send(fetchImpl, `${origin(api)}/.well-known/oauth-authorization-server`, { method: "GET" });
+  } catch (error) {
+    if (error instanceof CliError && error.code === "network_error") throw error;
+    return fallback;
+  }
+  if (result.status !== 200 || !result.body || typeof result.body !== "object") return fallback;
+  const meta = result.body;
+  const pick = (key) => {
+    const value = meta[key];
+    return typeof value === "string" && sameOrigin(value, api) ? value : fallback[key];
+  };
+  const cli = meta.homebase_cli_client_id;
+  return {
+    issuer: pick("issuer"),
+    authorization_endpoint: pick("authorization_endpoint"),
+    token_endpoint: pick("token_endpoint"),
+    revocation_endpoint: pick("revocation_endpoint"),
+    ...typeof cli === "string" && cli.startsWith("https://") ? { cli_client_id: cli } : {}
+  };
+}
+function cliClientIdFor(api, endpoints, env) {
+  const override = env.HOMEBASE_CLIENT_ID?.trim();
+  if (override) return override;
+  if (endpoints?.cli_client_id) return endpoints.cli_client_id;
+  return sameOrigin(api, DEFAULT_API_URL) ? DEFAULT_CLIENT_ID : void 0;
+}
+function createPkce() {
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge, method: "S256" };
+}
+function randomState() {
+  return randomBytes(24).toString("base64url");
+}
+function authorizeUrl(endpoints, params) {
+  const url = new URL(endpoints.authorization_endpoint);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", params.clientId);
+  url.searchParams.set("redirect_uri", params.redirectUri);
+  url.searchParams.set("code_challenge", params.pkce.challenge);
+  url.searchParams.set("code_challenge_method", params.pkce.method);
+  url.searchParams.set("state", params.state);
+  if (params.scopes?.length) url.searchParams.set("scope", params.scopes.join(" "));
+  if (params.workspace) url.searchParams.set("workspace", params.workspace);
+  if (params.deviceName) url.searchParams.set("device_name", params.deviceName);
+  return url.toString();
+}
+function oauthFailure(status, body) {
+  const raw = body && typeof body === "object" ? body : {};
+  return {
+    error: typeof raw.error === "string" ? raw.error : `http_${status}`,
+    description: typeof raw.error_description === "string" ? raw.error_description : `HTTP ${status}`
+  };
+}
+function form(values) {
+  return { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(values).toString() };
+}
+function asTokens(body) {
+  const raw = body && typeof body === "object" ? body : null;
+  if (!raw || typeof raw.access_token !== "string") return null;
+  return {
+    access_token: raw.access_token,
+    refresh_token: typeof raw.refresh_token === "string" ? raw.refresh_token : void 0,
+    expires_in: typeof raw.expires_in === "number" ? raw.expires_in : void 0,
+    scope: typeof raw.scope === "string" ? raw.scope : void 0,
+    token_type: typeof raw.token_type === "string" ? raw.token_type : void 0
+  };
+}
+async function exchangeCode(fetchImpl, endpoints, params) {
+  const result = await send(
+    fetchImpl,
+    endpoints.token_endpoint,
+    form({ grant_type: "authorization_code", code: params.code, code_verifier: params.verifier, redirect_uri: params.redirectUri, client_id: params.clientId })
+  );
+  const tokens = result.status === 200 ? asTokens(result.body) : null;
+  if (!tokens) {
+    const failure = oauthFailure(result.status, result.body);
+    throw new CliError(`Homebase didn't accept the login (${failure.error}: ${failure.description}). Run \`homebase login\` again.`, {
+      exitCode: result.status === 429 ? EXIT.limit : EXIT.auth,
+      code: failure.error,
+      status: result.status
+    });
+  }
+  return tokens;
+}
+async function refreshTokens(fetchImpl, endpoints, params) {
+  let result;
+  try {
+    result = await send(fetchImpl, endpoints.token_endpoint, form({ grant_type: "refresh_token", refresh_token: params.refreshToken, client_id: params.clientId }));
+  } catch (error) {
+    return { ok: false, kind: "transient", message: error instanceof Error ? error.message : String(error) };
+  }
+  const tokens = result.status === 200 ? asTokens(result.body) : null;
+  if (tokens) return { ok: true, tokens };
+  const failure = oauthFailure(result.status, result.body);
+  if (result.status === 400 && (failure.error === "invalid_grant" || failure.error === "invalid_client" || failure.error === "invalid_scope")) {
+    return { ok: false, kind: "invalid_grant", message: failure.description };
+  }
+  if (result.status === 401) return { ok: false, kind: "invalid_grant", message: failure.description };
+  const retry = Number(result.headers.get("Retry-After") ?? NaN);
+  return { ok: false, kind: "transient", message: `${failure.error}: ${failure.description}`, ...Number.isFinite(retry) ? { retryAfterS: retry } : {} };
+}
+async function revokeToken(fetchImpl, endpoints, params) {
+  const result = await send(fetchImpl, endpoints.revocation_endpoint, form({ token: params.token, client_id: params.clientId }));
+  return result.status === 200;
+}
+
+// src/session.ts
+var EnvAuth = class {
+  origin;
+  value;
+  constructor(value, api) {
+    this.value = value;
+    this.origin = origin(api);
+  }
+  async token() {
+    return this.value;
+  }
+  async recover() {
+    return null;
+  }
+};
+function expiresAt(session) {
+  if (!session.access_expires_at) return void 0;
+  const at = Date.parse(session.access_expires_at);
+  return Number.isFinite(at) ? at : void 0;
+}
+function needsRefresh(session, now) {
+  const at = expiresAt(session);
+  return canRefresh(session) && at !== void 0 && at - now < REFRESH_SKEW_MS;
+}
+function applyTokens(session, tokens, now) {
+  return {
+    ...session,
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token ?? session.refresh_token,
+    access_expires_at: tokens.expires_in !== void 0 ? new Date(now + tokens.expires_in * 1e3).toISOString() : session.access_expires_at,
+    scopes: tokens.scope ? tokens.scope.split(/\s+/).filter(Boolean) : session.scopes
+  };
+}
+var ProfileAuth = class {
+  origin;
+  session;
+  legacyNoticeShown = false;
+  now;
+  opts;
+  constructor(opts) {
+    this.opts = opts;
+    this.session = opts.session;
+    this.origin = origin(opts.session.api);
+    this.now = opts.now ?? Date.now;
+  }
+  current() {
+    return this.session;
+  }
+  async token() {
+    if (!canRefresh(this.session)) {
+      if (!this.legacyNoticeShown) {
+        this.legacyNoticeShown = true;
+        this.opts.notice?.(
+          "Note: this saved login is an older kind that doesn't renew itself. Run `homebase login` once to switch to one that stays signed in (and can be revoked as one connection)."
+        );
+      }
+      return this.session.access_token;
+    }
+    if (needsRefresh(this.session, this.now())) await this.refresh(this.session.access_token, false);
+    return this.session.access_token;
+  }
+  async recover(failed, code) {
+    if (code !== "token_expired" && code !== "unauthorized") return null;
+    const stored = this.reload();
+    if (stored && stored.access_token !== failed && sameLogin(stored, this.session)) {
+      this.session = stored;
+      return stored.access_token;
+    }
+    if (!canRefresh(this.session)) return null;
+    await this.refresh(failed, true);
+    return this.session.access_token !== failed ? this.session.access_token : null;
+  }
+  reload() {
+    try {
+      return this.opts.store.session(this.opts.profile)?.session ?? null;
+    } catch {
+      return null;
+    }
+  }
+  /**
+   * Renews under the profile's lock. `failed` is the access token we had;
+   * `force` refreshes even if the saved one still looks valid (after a 401).
+   */
+  async refresh(failed, force) {
+    await this.opts.store.withRefreshLock(
+      this.opts.profile,
+      async () => {
+        const stored = this.reload();
+        if (stored && sameLogin(stored, this.session)) {
+          if (stored.access_token !== failed && !needsRefresh(stored, this.now())) {
+            this.session = stored;
+            return;
+          }
+          this.session = stored;
+        }
+        const session = this.session;
+        if (!canRefresh(session)) return;
+        if (!force && !needsRefresh(session, this.now())) return;
+        const endpoints = endpointsForIssuer(session.api, session.issuer);
+        const outcome = await refreshTokens(this.opts.fetch, endpoints, { refreshToken: session.refresh_token, clientId: session.client_id });
+        if (outcome.ok) {
+          this.session = applyTokens(session, outcome.tokens, this.now());
+          this.opts.store.updateSession(this.opts.profile, this.session);
+          return;
+        }
+        if (outcome.kind === "invalid_grant") {
+          throw new CliError(`Your Homebase login has ended (${outcome.message}). Run \`homebase login\` to sign in again.`, {
+            exitCode: EXIT.auth,
+            code: "login_expired"
+          });
+        }
+        const at = expiresAt(session);
+        if (at !== void 0 && at > this.now() && !force) {
+          this.opts.notice?.(`Note: couldn't renew the Homebase login just now (${outcome.message}); using the current token.`);
+          return;
+        }
+        throw new CliError(`Couldn't renew the Homebase login (${outcome.message}). Check the network and retry.`, {
+          exitCode: EXIT.other,
+          code: "refresh_failed",
+          ...outcome.retryAfterS ? { server: { code: "refresh_failed", message: outcome.message, retry_after_s: outcome.retryAfterS } } : {}
+        });
+      }
+    );
+  }
+};
+function sameLogin(a, b) {
+  return a.api === b.api && (a.client_id ?? "") === (b.client_id ?? "");
+}
+
+// src/api.ts
+var realSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+var MAX_REDIRECTS = 3;
+var Api = class {
+  baseUrl;
+  origin;
+  auth;
+  noAuth;
+  fetchImpl;
+  sleep;
+  onWait;
+  constructor(opts) {
+    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.origin = new URL(this.baseUrl).origin;
+    this.auth = opts.auth ?? (opts.token ? new EnvAuth(opts.token, this.baseUrl) : void 0);
+    if (this.auth && this.auth.origin !== this.origin) {
+      throw new CliError(`Internal error: a credential for ${this.auth.origin} can't be used with ${this.origin}.`, { exitCode: EXIT.usage, code: "origin_mismatch" });
+    }
+    this.noAuth = opts.noAuth;
+    this.fetchImpl = opts.fetch ?? ((input, init) => fetch(input, init));
+    this.sleep = opts.sleep ?? realSleep;
+    this.onWait = opts.onWait;
+  }
+  /** Whether requests will carry a credential. */
+  get hasAuth() {
+    return Boolean(this.auth);
+  }
+  url(path, query) {
+    const url = new URL(this.baseUrl + path);
+    if (url.origin !== this.origin) throw new CliError(`Refusing to call ${url.origin}: not the API origin.`, { code: "origin_mismatch" });
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value !== void 0) url.searchParams.set(key, String(value));
+    }
+    return url.toString();
+  }
+  /**
+   * One fetch with redirects handled here (redirect: "manual"): a redirect
+   * is followed only within the API origin; to anywhere else it is an error,
+   * so an Authorization header can never be forwarded off-origin.
+   */
+  async fetchSameOrigin(url, init) {
+    let target = url;
+    let current = init;
+    for (let hop = 0; ; hop++) {
+      const response = await this.fetchImpl(target, { ...current, redirect: "manual" });
+      const isRedirect = response.status >= 300 && response.status < 400 && response.status !== 304;
+      if (!isRedirect && response.type !== "opaqueredirect") return response;
+      const location = response.headers.get("Location");
+      let next = null;
+      try {
+        next = location ? new URL(location, target) : null;
+      } catch {
+        next = null;
+      }
+      if (!next || next.origin !== this.origin) {
+        throw new CliError(
+          `Homebase at ${this.origin} redirected to ${next ? next.origin : "an unknown location"}. The CLI doesn't follow redirects to other sites with your login; check --api.`,
+          { exitCode: EXIT.other, code: "cross_origin_redirect", status: response.status }
+        );
+      }
+      if (hop >= MAX_REDIRECTS) throw new CliError(`Too many redirects from ${this.origin}.`, { code: "too_many_redirects", status: response.status });
+      if (response.status === 303 || (response.status === 301 || response.status === 302) && current.method !== "GET" && current.method !== "HEAD") {
+        current = { ...current, method: "GET", body: void 0 };
+      }
+      target = next.toString();
+    }
+  }
+  async request(method, path, opts = {}) {
+    const needsAuth = opts.auth !== false;
+    if (needsAuth && !this.auth) {
+      throw this.noAuth?.() ?? new CliError("Not logged in to Homebase. Run `homebase login` (or set HOMEBASE_TOKEN), then retry.", {
+        exitCode: EXIT.auth,
+        code: "not_logged_in"
+      });
+    }
+    const url = this.url(path, opts.query);
+    let token2 = needsAuth ? await this.auth.token() : void 0;
+    let recovered = false;
+    for (let attempt = 0; ; attempt++) {
+      const headers = { "User-Agent": USER_AGENT, Accept: "application/json" };
+      if (token2) headers.Authorization = `Bearer ${token2}`;
+      if (opts.body !== void 0) headers["Content-Type"] = "application/json";
+      let response;
+      try {
+        response = await this.fetchSameOrigin(url, {
+          method,
+          headers,
+          body: opts.body === void 0 ? void 0 : JSON.stringify(opts.body)
+        });
+      } catch (error2) {
+        if (error2 instanceof CliError) throw error2;
+        const reason = error2 instanceof Error ? error2.cause instanceof Error ? error2.cause.message : error2.message : String(error2);
+        throw new CliError(`Couldn't reach Homebase at ${this.baseUrl} (${reason}). Check the network or --api, then retry.`, {
+          exitCode: EXIT.other,
+          code: "network_error"
+        });
+      }
+      const text = await response.text();
+      let body = text;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+      }
+      if (response.ok) return body;
+      const error = fromServer(response.status, body);
+      if (response.status === 401 && token2 && !recovered) {
+        recovered = true;
+        const next = await this.auth.recover(token2, error.server?.code);
+        if (next && next !== token2) {
+          token2 = next;
+          continue;
+        }
+      }
+      const wait = error.server?.retry_after_s ?? Number(response.headers.get("Retry-After") ?? NaN);
+      if (response.status === 429 && error.code === "rate_limited" && attempt < 2 && Number.isFinite(wait) && wait <= MAX_AUTO_RETRY_S) {
+        this.onWait?.(wait, error.message);
+        await this.sleep(Math.max(1, wait) * 1e3);
+        continue;
+      }
+      throw error;
+    }
+  }
+  get(path, query) {
+    return this.request("GET", path, { query });
+  }
+  post(path, body = {}) {
+    return this.request("POST", path, { body });
+  }
+  patch(path, body) {
+    return this.request("PATCH", path, { body });
   }
 };
 
@@ -563,15 +1024,27 @@ function formatBytes(bytes) {
   }
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
+var CONTROL = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-?]*[ -/]*[@-~]|[\u0000-\u001f\u007f-\u009f]/g;
+function stripControl(text) {
+  return text.replace(CONTROL, "");
+}
+function shellQuote(text) {
+  return `'${stripControl(text).replace(/'/g, "'\\''")}'`;
+}
 function truncate(text, max) {
-  const clean = text.replace(/\s+/g, " ").trim();
+  const clean = stripControl(text).replace(/\s+/g, " ").trim();
   return clean.length <= max ? clean : `${clean.slice(0, Math.max(1, max - 1))}\u2026`;
+}
+var OWN_SGR = /^\u001b\[(?:1|2|22|31|32|33|36|39)m$/;
+function safeCell(text) {
+  return text.replace(CONTROL, (match) => OWN_SGR.test(match) ? match : "");
 }
 function table(rows, gap = "  ") {
   if (!rows.length) return "";
+  const safe = rows.map((row) => row.map(safeCell));
   const widths = [];
-  for (const row of rows) row.forEach((cell, index) => widths[index] = Math.max(widths[index] ?? 0, visibleLength(cell)));
-  return rows.map((row) => row.map((cell, index) => index === row.length - 1 ? cell : cell + " ".repeat(widths[index] - visibleLength(cell))).join(gap).trimEnd()).join("\n");
+  for (const row of safe) row.forEach((cell, index) => widths[index] = Math.max(widths[index] ?? 0, visibleLength(cell)));
+  return safe.map((row) => row.map((cell, index) => index === row.length - 1 ? cell : cell + " ".repeat(widths[index] - visibleLength(cell))).join(gap).trimEnd()).join("\n");
 }
 function visibleLength(text) {
   return text.replace(/\u001b\[[0-9;]*m/g, "").length;
@@ -727,7 +1200,13 @@ function renderBuckets(io, buckets2, nextCursor) {
 
 // src/context.ts
 function openInBrowser(url) {
-  const [command, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url.replace(/&/g, "^&")]] : ["xdg-open", [url]];
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return Promise.resolve(false);
+  } catch {
+    return Promise.resolve(false);
+  }
+  const [command, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["rundll32.exe", ["url.dll,FileProtocolHandler", url]] : ["xdg-open", [url]];
   return new Promise((resolve4) => {
     try {
       const child = spawn(command, args, { stdio: "ignore", detached: true });
@@ -753,45 +1232,106 @@ function promptConfirm(io) {
     }
   };
 }
-function normalizeApiUrl(raw) {
+var LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])$/;
+function normalizeApiUrl(raw, source = "--api") {
   let url;
   try {
     url = new URL(raw);
   } catch {
-    throw usageError(`--api must be a full URL like ${DEFAULT_API_URL}.`);
+    throw usageError(`${source} must be a full URL like ${DEFAULT_API_URL}.`);
   }
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname))) {
-    throw usageError("--api must use https (http only for localhost).");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOST.test(url.hostname))) {
+    throw usageError(`${source} must use https (plain http only for localhost, 127.0.0.1 or [::1]).`);
   }
+  if (url.username || url.password) throw usageError(`${source} can't contain a user name or password.`);
   return url.toString().replace(/\/+$/, "");
+}
+function originOf(url) {
+  return new URL(url).origin;
+}
+function resolveCredential(args) {
+  const { env, store, config, apiUrl } = args;
+  const target = originOf(apiUrl);
+  const envToken = env.HOMEBASE_TOKEN?.trim();
+  if (envToken) {
+    const home = args.envApi ?? config.profiles[args.profile]?.api ?? DEFAULT_API_URL;
+    if (originOf(home) === target) return { auth: new EnvAuth(envToken, apiUrl), tokenSource: "env", profile: args.profile };
+    return {
+      tokenSource: "none",
+      profile: args.profile,
+      noAuth: () => usageError(
+        `HOMEBASE_TOKEN is for ${originOf(home)}, so it isn't sent to ${target} (from ${args.apiSource === "flag" ? "--api" : "HOMEBASE_API_URL"}). Homebase never sends a token to a server it wasn't issued for.`,
+        `To use a token with ${target}, set HOMEBASE_API_URL=${target} alongside HOMEBASE_TOKEN, or run \`homebase login --api ${target}\`.`
+      )
+    };
+  }
+  const candidates = args.profileExplicit ? [args.profile] : [args.profile, ...Object.keys(config.profiles).filter((name) => name !== args.profile)];
+  for (const name of candidates) {
+    const info = config.profiles[name];
+    if (!info || originOf(info.api) !== target) continue;
+    const stored = store.session(name);
+    if (!stored || originOf(stored.session.api) !== target) continue;
+    const auth = new ProfileAuth({ store, profile: name, session: stored.session, fetch: args.fetch, sleep: args.sleep, notice: args.notice });
+    return { auth, tokenSource: stored.storage, profile: name };
+  }
+  const saved = config.profiles[args.profile];
+  if (saved && originOf(saved.api) !== target) {
+    const via = args.apiSource === "flag" ? "--api" : "HOMEBASE_API_URL";
+    return {
+      tokenSource: "none",
+      profile: args.profile,
+      noAuth: () => usageError(
+        `Your saved login (profile ${args.profile}) is for ${originOf(saved.api)}, not ${target} (from ${via}). Homebase never sends a saved login to another server.`,
+        `To use ${target}, run \`homebase login --api ${target} --profile <name>\`, or set HOMEBASE_TOKEN for it.`
+      )
+    };
+  }
+  return { tokenSource: "none", profile: args.profile };
 }
 function createCtx(parsed, overrides = {}) {
   const io = overrides.io ?? processIo();
   const env = overrides.env ?? process.env;
-  const store = overrides.store ?? new CredentialStore({ dir: void 0 });
+  const store = overrides.store ?? new CredentialStore({ dir: void 0, env });
   const json = Boolean(parsed.values.json);
   const config = store.readConfig();
-  const profile = validateProfileName(stringOption(parsed.values.profile) ?? env.HOMEBASE_PROFILE ?? config.defaultProfile ?? "default");
+  const namedProfile = stringOption(parsed.values.profile) ?? env.HOMEBASE_PROFILE;
+  const profile = validateProfileName(namedProfile ?? config.defaultProfile ?? "default");
   const profileInfo = config.profiles[profile];
-  const explicitApi = stringOption(parsed.values.api) ?? env.HOMEBASE_API_URL;
-  const apiUrl = normalizeApiUrl(explicitApi ?? profileInfo?.api ?? DEFAULT_API_URL);
-  let token2;
-  let tokenSource = "none";
-  if (env.HOMEBASE_TOKEN?.trim()) {
-    token2 = env.HOMEBASE_TOKEN.trim();
-    tokenSource = "env";
-  } else if (profileInfo) {
-    const stored = store.token(profile);
-    if (stored) {
-      token2 = stored.token;
-      tokenSource = stored.storage;
-    }
-  }
+  const flagApi = stringOption(parsed.values.api);
+  const envApi = env.HOMEBASE_API_URL?.trim() || void 0;
+  const apiSource = flagApi ? "flag" : envApi ? "env" : profileInfo ? "profile" : "default";
+  const apiUrl = flagApi ? normalizeApiUrl(flagApi, "--api") : envApi ? normalizeApiUrl(envApi, "HOMEBASE_API_URL") : normalizeApiUrl(profileInfo?.api ?? DEFAULT_API_URL);
   const fetchImpl = overrides.fetch ?? ((input, init) => fetch(input, init));
   const sleep = overrides.sleep ?? realSleep;
+  const notices = /* @__PURE__ */ new Set();
+  const notice = (message) => {
+    if (notices.has(message)) return;
+    notices.add(message);
+    io.stderr(`${message}
+`);
+  };
+  const usual = profileInfo?.api ?? DEFAULT_API_URL;
+  if ((apiSource === "flag" || apiSource === "env") && originOf(apiUrl) !== originOf(usual)) {
+    notice(`Note: using the Homebase API at ${originOf(apiUrl)} (from ${apiSource === "flag" ? "--api" : "HOMEBASE_API_URL"}), not ${originOf(usual)}.`);
+  }
+  const credential = resolveCredential({
+    env,
+    store,
+    config,
+    profile,
+    profileExplicit: namedProfile !== void 0,
+    apiUrl,
+    apiSource,
+    flagApi,
+    envApi: envApi ? normalizeApiUrl(envApi, "HOMEBASE_API_URL") : void 0,
+    fetch: fetchImpl,
+    sleep,
+    notice
+  });
   const api = new Api({
     baseUrl: apiUrl,
-    token: token2,
+    auth: credential.auth,
+    noAuth: credential.noAuth,
     fetch: fetchImpl,
     sleep,
     onWait: (seconds, message) => {
@@ -804,12 +1344,14 @@ function createCtx(parsed, overrides = {}) {
     json,
     env,
     apiUrl,
-    apiExplicit: Boolean(explicitApi),
-    profile,
-    profileInfo,
+    apiSource,
+    apiExplicit: apiSource === "flag" || apiSource === "env",
+    profile: credential.profile,
+    profileExplicit: namedProfile !== void 0,
+    profileInfo: config.profiles[credential.profile],
     store,
-    token: token2,
-    tokenSource,
+    auth: credential.auth,
+    tokenSource: credential.tokenSource,
     fetch: fetchImpl,
     sleep,
     api,
@@ -828,6 +1370,7 @@ async function postJson(fetchImpl, url, body) {
   try {
     response = await fetchImpl(url, {
       method: "POST",
+      redirect: "manual",
       headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": USER_AGENT },
       body: JSON.stringify(body)
     });
@@ -842,8 +1385,14 @@ async function postJson(fetchImpl, url, body) {
   }
   return { status: response.status, body: parsed, headers: response.headers };
 }
-async function startDeviceLogin(fetchImpl, api, hostname2) {
-  const { status, body } = await postJson(fetchImpl, `${api}/v1/auth/device`, { client_name: CLIENT_NAME, hostname: hostname2.slice(0, 80) });
+async function startDeviceLogin(fetchImpl, api, hostname2, opts = {}) {
+  const { status, body } = await postJson(fetchImpl, `${api}/v1/auth/device`, {
+    client_name: CLIENT_NAME,
+    hostname: hostname2.slice(0, 80),
+    ...opts.clientId ? { client_id: opts.clientId } : {},
+    ...opts.scopes?.length ? { scope: opts.scopes.join(" ") } : {},
+    ...opts.workspace ? { workspace: opts.workspace } : {}
+  });
   if (status !== 200) {
     const server = extractServerError(body);
     throw new CliError(server?.message ?? `Couldn't start the login (HTTP ${status}).`, {
@@ -916,12 +1465,208 @@ async function pollDeviceLogin(opts) {
   throw new CliError("The login code expired before it was approved. Run `homebase login` again.", { exitCode: EXIT.auth, code: "expired_token" });
 }
 
+// src/loopback.ts
+import { createServer } from "node:http";
+var CALLBACK_PATH = "/callback";
+var escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+function callbackPage(ok, title, message) {
+  const mark = ok ? "\u2713" : "!";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} \xB7 Homebase CLI</title>
+<style>
+:root{--bg:#f7f7f5;--card:#fff;--text:#1a1a1a;--muted:#555;--line:#e5e5e0;--ok:#15803d;--bad:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#151515;--card:#1e1e1e;--text:#eee;--muted:#aaa;--line:#333;--ok:#4ade80;--bad:#f87171}}
+body{font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);margin:0;padding:48px 16px}
+main{max-width:440px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px}
+.mark{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;font-size:22px;font-weight:700;margin-bottom:16px;color:${ok ? "var(--ok)" : "var(--bad)"};border:1px solid var(--line)}
+h1{font-size:22px;line-height:1.3;margin:0 0 8px}p{margin:0;color:var(--muted)}
+</style></head><body><main><div class="mark" aria-hidden="true">${mark}</div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></main></body></html>`;
+}
+function reply(response, status, html) {
+  response.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    Connection: "close"
+  });
+  response.end(html);
+}
+async function startLoopback(opts) {
+  let settle;
+  const result = new Promise((resolve4, reject) => {
+    settle = { resolve: resolve4, reject };
+  });
+  result.catch(() => void 0);
+  let done = false;
+  let port = 0;
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (done || request.method !== "GET" || url.pathname !== CALLBACK_PATH || request.headers.host !== `127.0.0.1:${port}`) {
+      reply(response, 404, callbackPage(false, "Not found", "This address only completes a Homebase CLI login."));
+      return;
+    }
+    done = true;
+    const finish = (error2, value) => {
+      response.on("finish", () => close());
+      if (error2) settle.reject(error2);
+      else settle.resolve(value);
+    };
+    const params = url.searchParams;
+    if (params.get("state") !== opts.state) {
+      reply(response, 400, callbackPage(false, "Login not completed", "This sign-in response didn't match the login started in your terminal, so it was ignored. Run `homebase login` again."));
+      finish(new CliError("The browser returned a response for a different login (state mismatch). Nothing was saved. Run `homebase login` again.", { exitCode: EXIT.auth, code: "state_mismatch" }));
+      return;
+    }
+    const error = params.get("error");
+    if (error) {
+      const denied = error === "access_denied";
+      const description = params.get("error_description") ?? error;
+      reply(
+        response,
+        200,
+        callbackPage(false, denied ? "Login cancelled" : "Login failed", denied ? "Nothing was connected. You can close this tab and return to your terminal." : `${description}. Return to your terminal.`)
+      );
+      finish(new CliError(denied ? "The login was denied in the browser. Nothing was saved." : `The login failed: ${description}`, { exitCode: EXIT.auth, code: error }));
+      return;
+    }
+    const code = params.get("code");
+    if (!code) {
+      reply(response, 400, callbackPage(false, "Login failed", "The sign-in response had no code. Return to your terminal and run `homebase login` again."));
+      finish(new CliError("The browser returned no authorization code. Run `homebase login` again.", { exitCode: EXIT.auth, code: "invalid_request" }));
+      return;
+    }
+    reply(response, 200, callbackPage(true, "You're signed in to the Homebase CLI", "You can close this tab and return to your terminal."));
+    finish(void 0, { code, iss: params.get("iss") ?? void 0 });
+  });
+  await new Promise((resolve4, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve4();
+    });
+  });
+  port = server.address().port;
+  const timer = setTimeout(() => {
+    if (done) return;
+    done = true;
+    settle.reject(new CliError(`No approval arrived within ${Math.round(opts.timeoutMs / 6e4)} minutes. Run \`homebase login\` again.`, { exitCode: EXIT.auth, code: "login_timeout" }));
+    close();
+  }, opts.timeoutMs);
+  timer.unref?.();
+  function close() {
+    clearTimeout(timer);
+    if (!done) {
+      done = true;
+      settle.reject(new CliError("The login was cancelled.", { exitCode: EXIT.auth, code: "login_cancelled" }));
+    }
+    server.close();
+    server.closeAllConnections?.();
+  }
+  return { port, redirectUri: `http://127.0.0.1:${port}${CALLBACK_PATH}`, result, close };
+}
+
 // src/commands/auth.ts
 function settingsUrl(workspaceUrl) {
   if (!workspaceUrl) return void 0;
   return workspaceUrl.replace(/\/library\/?$/, "") + "/settings/agents";
 }
-async function finishLogin(ctx, pending) {
+function deviceName() {
+  return hostname().replace(/\.local$/i, "").slice(0, 60);
+}
+function headlessReason(env, platform = process.platform) {
+  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) return "this is an SSH session";
+  if (env.CI && env.CI !== "0" && env.CI.toLowerCase() !== "false") return "this looks like CI";
+  if (platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return "there's no display";
+  return void 0;
+}
+function parseScopes(raw) {
+  const list = listOption(raw).flatMap((item) => item.split(/\s+/)).filter(Boolean);
+  if (!list.length) return void 0;
+  const unknown = list.filter((scope) => !ALL_SCOPES.includes(scope));
+  if (unknown.length) throw usageError(`Unknown permission: ${unknown.join(", ")}. Choose from ${ALL_SCOPES.join(", ")}.`);
+  return [...new Set(list)];
+}
+function parseWorkspace(raw) {
+  const slug = stringOption(raw)?.trim().toLowerCase();
+  if (slug === void 0) return void 0;
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug)) throw usageError("--workspace takes the workspace's slug, as in \u2026/org/<slug>/library.");
+  return slug;
+}
+function sessionFrom(api, tokens, clientId, now = Date.now()) {
+  const refreshable = Boolean(tokens.refresh_token && clientId);
+  const scopes = "scopes" in tokens && Array.isArray(tokens.scopes) ? tokens.scopes : tokens.scope?.split(/\s+/).filter(Boolean);
+  return {
+    api,
+    ...refreshable ? { issuer: origin(api), client_id: clientId, refresh_token: tokens.refresh_token } : {},
+    access_token: tokens.access_token,
+    ...tokens.expires_in !== void 0 ? { access_expires_at: new Date(now + tokens.expires_in * 1e3).toISOString() } : {},
+    scopes
+  };
+}
+async function revokeSession(ctx, session) {
+  try {
+    if (canRefresh(session)) {
+      const ok = await revokeToken(ctx.fetch, endpointsForIssuer(session.api, session.issuer), { token: session.refresh_token, clientId: session.client_id });
+      return ok ? { revoked: true, how: "revoked" } : { revoked: false, how: "failed", detail: "The server didn't confirm the revocation." };
+    }
+    await new Api({ baseUrl: session.api, token: session.access_token, fetch: ctx.fetch, sleep: ctx.sleep }).post("/v1/auth/revoke", {});
+    return { revoked: true, how: "revoked" };
+  } catch (error) {
+    if (isMissingRoute(error)) return { revoked: false, how: "unsupported", detail: "This Homebase server has no revoke call yet." };
+    if (error instanceof CliError && error.status === 401) return { revoked: true, how: "already_invalid", detail: "The login was already revoked or expired." };
+    return { revoked: false, how: "failed", detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+async function saveLogin(ctx, profile, session, extra) {
+  let me;
+  try {
+    me = await new Api({ baseUrl: session.api, token: session.access_token, fetch: ctx.fetch, sleep: ctx.sleep }).get("/v1/me");
+  } catch {
+    me = void 0;
+  }
+  const workspace = me?.workspace ? { id: me.workspace.id, name: me.workspace.name, slug: me.workspace.slug, ...me.workspace.url ? { url: me.workspace.url } : {} } : extra.workspace;
+  const scopes = me?.token.scopes ?? session.scopes ?? [];
+  const previous = ctx.store.session(profile);
+  const saved = ctx.store.saveSession(
+    profile,
+    { workspace, tokenName: me?.token.name ?? extra.tokenName, tokenId: me?.token.id, scopes },
+    { ...session, scopes, workspace }
+  );
+  if (previous && previous.session.access_token !== session.access_token && sameOrigin(previous.session.api, session.api)) {
+    await revokeSession(ctx, previous.session);
+  }
+  ctx.store.clearPending();
+  const refreshing = canRefresh(session);
+  const result = {
+    event: "logged_in",
+    profile,
+    api: session.api,
+    flow: extra.flow,
+    workspace,
+    user: me ? { name: me.user.name, email: me.user.email, role: me.user.role } : void 0,
+    scopes,
+    token_name: me?.token.name ?? extra.tokenName,
+    storage: saved.storage,
+    renews: refreshing
+  };
+  if (ctx.json) {
+    printJson(ctx.io, result);
+    return;
+  }
+  const s = style(ctx.io);
+  const where = saved.storage === "keychain" ? ctx.store.keychain?.name ?? "the keychain" : ctx.store.credentialsPath;
+  ctx.io.stdout(
+    [
+      `${s.green("\u2713")} Logged in to ${s.bold(workspace?.name ?? "Homebase")}${me?.user.name ? ` as ${me.user.name}` : ""}.`,
+      `  Profile ${profile} \xB7 \u201C${result.token_name ?? "Homebase CLI"}\u201D \xB7 stored in ${where}`,
+      `  Permissions: ${scopes.map((scope) => SCOPE_LABELS[scope] ?? scope).join(", ")}`,
+      refreshing ? "  Stays signed in (renews itself); revoke it any time in Settings \u2192 Agents." : ""
+    ].filter(Boolean).join("\n") + "\n"
+  );
+  if (ctx.env.HOMEBASE_TOKEN) ctx.io.stderr("Note: HOMEBASE_TOKEN is set in this shell and takes precedence over the saved login.\n");
+}
+async function finishDeviceLogin(ctx, pending) {
   const token2 = await pollDeviceLogin({
     fetch: ctx.fetch,
     sleep: ctx.sleep,
@@ -933,134 +1678,197 @@ async function finishLogin(ctx, pending) {
 `);
     }
   });
-  let me;
+  await saveLogin(ctx, pending.profile, sessionFrom(pending.api, token2, pending.client_id), { flow: "device", tokenName: token2.token_name, workspace: token2.workspace });
+}
+async function deviceLogin(ctx, parsed) {
+  let clientId;
   try {
-    me = await new Api({ baseUrl: pending.api, token: token2.access_token, fetch: ctx.fetch, sleep: ctx.sleep }).get("/v1/me");
+    clientId = cliClientIdFor(ctx.apiUrl, await discover(ctx.fetch, ctx.apiUrl), ctx.env);
   } catch {
-    me = void 0;
+    clientId = cliClientIdFor(ctx.apiUrl, void 0, ctx.env);
   }
-  const workspace = { ...token2.workspace, ...me?.workspace.url ? { url: me.workspace.url } : {} };
-  const saved = ctx.store.save(
-    pending.profile,
-    { api: pending.api, workspace, tokenName: token2.token_name, tokenId: me?.token.id, scopes: token2.scopes },
-    token2.access_token
-  );
-  ctx.store.clearPending();
-  const result = {
-    event: "logged_in",
-    profile: pending.profile,
-    workspace,
-    user: me ? { name: me.user.name, email: me.user.email, role: me.user.role } : void 0,
-    scopes: token2.scopes,
-    token_name: token2.token_name,
-    storage: saved.storage
+  const started = await startDeviceLogin(ctx.fetch, ctx.apiUrl, deviceName(), { clientId, scopes: parsed.scopes, workspace: parsed.workspace });
+  const pending = {
+    ...started,
+    api: ctx.apiUrl,
+    profile: parsed.profile,
+    expires_at: new Date(Date.now() + started.expires_in * 1e3).toISOString(),
+    ...clientId ? { client_id: clientId } : {}
   };
+  if (parsed.noWait) ctx.store.savePending(pending);
+  const opened = parsed.noBrowser || parsed.reason ? false : await ctx.openUrl(started.verification_uri_complete);
+  const nextStep = parsed.noWait ? "Ask the user to open verification_uri_complete (on any device), check the code matches, pick the workspace and approve. Then run `homebase login --resume`." : "Ask the user to open verification_uri_complete (on any device), check the code matches, pick the workspace and approve. This command keeps waiting and prints a logged_in event when done.";
   if (ctx.json) {
-    printJson(ctx.io, result);
-    return;
+    printJson(ctx.io, {
+      event: "login_started",
+      flow: "device",
+      verification_uri_complete: started.verification_uri_complete,
+      verification_uri: started.verification_uri,
+      user_code: started.user_code,
+      expires_at: pending.expires_at,
+      profile: parsed.profile,
+      browser_opened: opened,
+      ...parsed.reason ? { why_device: parsed.reason } : {},
+      next_step: nextStep
+    });
+  } else {
+    const s = style(ctx.io);
+    ctx.io.stderr(
+      [
+        parsed.reason ? `Using a device login because ${parsed.reason}.` : "",
+        opened ? "Opened your browser to approve this login." : "Open this link on any device to approve this login:",
+        `  ${s.cyan(started.verification_uri_complete)}`,
+        `  Code: ${s.bold(started.user_code)} (check it matches the page)`,
+        parsed.noWait ? "Then run `homebase login --resume`." : "Waiting for approval\u2026 (Ctrl-C to cancel)",
+        ""
+      ].filter((line, index) => line !== "" || index > 0).join("\n")
+    );
   }
-  const s = style(ctx.io);
-  const where = saved.storage === "keychain" ? ctx.store.keychain?.name ?? "the keychain" : ctx.store.credentialsPath;
-  ctx.io.stdout(
-    [
-      `${s.green("\u2713")} Logged in to ${s.bold(workspace.name)}${me?.user.name ? ` as ${me.user.name}` : ""}.`,
-      `  Profile ${pending.profile} \xB7 token \u201C${token2.token_name ?? "Homebase CLI"}\u201D stored in ${where}`,
-      `  Permissions: ${token2.scopes.map((scope) => SCOPE_LABELS[scope] ?? scope).join(", ")}`
-    ].join("\n") + "\n"
-  );
-  if (ctx.env.HOMEBASE_TOKEN) ctx.io.stderr("Note: HOMEBASE_TOKEN is set in this shell and takes precedence over the saved login.\n");
+  if (parsed.noWait) return;
+  await finishDeviceLogin(ctx, pending);
+}
+async function browserLogin(ctx, parsed) {
+  const endpoints = await discover(ctx.fetch, ctx.apiUrl);
+  const clientId = cliClientIdFor(ctx.apiUrl, endpoints, ctx.env);
+  if (!clientId) return { done: false, reason: "this server doesn't name a Homebase CLI client" };
+  const pkce = createPkce();
+  const state = randomState();
+  const loopback = await startLoopback({ state, timeoutMs: parsed.timeoutMs });
+  const url = authorizeUrl(endpoints, {
+    clientId,
+    redirectUri: loopback.redirectUri,
+    pkce,
+    state,
+    scopes: parsed.scopes,
+    workspace: parsed.workspace,
+    deviceName: deviceName()
+  });
+  const opened = parsed.noBrowser ? false : await ctx.openUrl(url);
+  if (!parsed.noBrowser && !opened) {
+    loopback.close();
+    return { done: false, reason: "no browser could be opened" };
+  }
+  if (ctx.json) {
+    printJson(ctx.io, {
+      event: "login_started",
+      flow: "browser",
+      authorize_url: url,
+      redirect_uri: loopback.redirectUri,
+      expires_at: new Date(Date.now() + parsed.timeoutMs).toISOString(),
+      profile: parsed.profile,
+      browser_opened: opened,
+      next_step: "Ask the user to open authorize_url in a browser on this same computer, check the workspace and permissions, and click Approve. This command waits and prints a logged_in event. On another device, use `homebase login --device` instead."
+    });
+  } else {
+    const s = style(ctx.io);
+    ctx.io.stderr(
+      [
+        opened ? "Opened your browser to sign in to Homebase. Approve there, then come back here." : "Open this link in a browser on this computer to sign in:",
+        `  ${s.cyan(url)}`,
+        "Waiting for approval\u2026 (Ctrl-C to cancel; on another device, use `homebase login --device`)",
+        ""
+      ].join("\n")
+    );
+  }
+  let callback;
+  try {
+    callback = await loopback.result;
+  } finally {
+    loopback.close();
+  }
+  if (callback.iss && !sameOrigin(callback.iss, endpoints.issuer)) {
+    throw new CliError(`The sign-in response came from ${callback.iss}, not ${endpoints.issuer}. Nothing was saved.`, { exitCode: EXIT.auth, code: "issuer_mismatch" });
+  }
+  const tokens = await exchangeCode(ctx.fetch, endpoints, { code: callback.code, verifier: pkce.verifier, redirectUri: loopback.redirectUri, clientId });
+  await saveLogin(ctx, parsed.profile, sessionFrom(ctx.apiUrl, tokens, clientId), { flow: "browser" });
+  return { done: true };
+}
+function loginProfile(ctx) {
+  const existing = ctx.store.readConfig().profiles[ctx.profile];
+  if (existing && !sameOrigin(existing.api, ctx.apiUrl)) {
+    throw usageError(
+      `Profile ${ctx.profile} is logged in to ${origin(existing.api)}, not ${origin(ctx.apiUrl)}.`,
+      `Add --profile <name> to keep both, or \`homebase logout --profile ${ctx.profile}\` first.`
+    );
+  }
+  return ctx.profile;
 }
 var login = {
   spec: {
     name: "login",
-    summary: "Connect this computer to a Homebase workspace (browser approval, no password typed here).",
-    usage: "homebase login [--profile <name>] [--no-browser] [--no-wait | --resume] [--json]",
+    summary: "Sign this computer in to a Homebase workspace in your browser (one click if you're signed in there).",
+    usage: "homebase login [--workspace <slug>] [--scopes <list>] [--device] [--no-browser] [--no-wait | --resume] [--profile <name>] [--json]",
     options: {
-      "no-browser": { type: "boolean", description: "Don't open a browser; just print the link" },
-      "no-wait": { type: "boolean", description: "Print the link and exit; finish later with --resume" },
-      resume: { type: "boolean", description: "Finish a login started with --no-wait" }
+      workspace: { type: "string", value: "slug", description: "Preselect this workspace on the approval page" },
+      scopes: { type: "string", value: "list", description: `Permissions to ask for, comma-separated (default: the everyday set). Any of ${ALL_SCOPES.join(", ")}` },
+      device: { type: "boolean", description: "Approve with a code from any device (SSH, headless). Chosen automatically when needed" },
+      "no-browser": { type: "boolean", description: "Don't open a browser; print the link to open yourself" },
+      "no-wait": { type: "boolean", description: "Device login: print the link and exit; finish later with --resume" },
+      resume: { type: "boolean", description: "Finish a device login started with --no-wait" },
+      yes: { type: "boolean", short: "y", description: "Confirm logging in to a non-default API from HOMEBASE_API_URL" }
     },
     maxArgs: 0,
-    examples: ["homebase login", "homebase login --profile client-acme", "homebase login --json --no-browser   # for agents: relay the link"]
+    examples: [
+      "homebase login",
+      "homebase login --workspace acme",
+      "homebase login --device                     # over SSH or without a browser",
+      "homebase login --json --no-browser          # agents: relay authorize_url to the user",
+      "homebase login --profile client-acme"
+    ]
   },
   async run(ctx, parsed) {
     if (parsed.values["no-wait"] && parsed.values.resume) throw usageError("Use either --no-wait or --resume.");
     if (parsed.values.resume) {
-      const pending2 = ctx.store.readPending();
-      if (!pending2) throw usageError("There's no login waiting to be finished. Run `homebase login`.");
-      if (Date.parse(pending2.expires_at) < Date.now()) {
+      const pending = ctx.store.readPending();
+      if (!pending) throw usageError("There's no login waiting to be finished. Run `homebase login`.");
+      if (Date.parse(pending.expires_at) < Date.now()) {
         ctx.store.clearPending();
         throw new CliError("That login code expired. Run `homebase login` again.", { exitCode: EXIT.auth, code: "expired_token" });
       }
-      if (!ctx.json) ctx.io.stderr(`Waiting for approval of ${pending2.user_code}\u2026
+      if (!ctx.json) ctx.io.stderr(`Waiting for approval of ${pending.user_code}\u2026
 `);
-      await finishLogin(ctx, pending2);
+      await finishDeviceLogin(ctx, pending);
       return;
     }
-    const started = await startDeviceLogin(ctx.fetch, ctx.apiUrl, hostname());
-    const pending = {
-      ...started,
-      api: ctx.apiUrl,
-      profile: ctx.profile,
-      expires_at: new Date(Date.now() + started.expires_in * 1e3).toISOString()
-    };
-    const noWait = Boolean(parsed.values["no-wait"]);
-    if (noWait) ctx.store.savePending(pending);
-    const opened = parsed.values["no-browser"] ? false : await ctx.openUrl(started.verification_uri_complete);
-    const nextStep = noWait ? "Ask the user to open verification_uri_complete, check the code matches, pick the workspace and approve. Then run `homebase login --resume`." : "Ask the user to open verification_uri_complete, check the code matches, pick the workspace and approve. This command keeps waiting and prints a logged_in event when done.";
-    if (ctx.json) {
-      printJson(ctx.io, {
-        event: "login_started",
-        verification_uri_complete: started.verification_uri_complete,
-        verification_uri: started.verification_uri,
-        user_code: started.user_code,
-        expires_at: pending.expires_at,
-        profile: ctx.profile,
-        browser_opened: opened,
-        next_step: nextStep
-      });
-    } else {
-      const s = style(ctx.io);
-      ctx.io.stderr(
-        [
-          `${opened ? "Opened your browser to approve this login." : "Open this link to approve this login:"}`,
-          `  ${s.cyan(started.verification_uri_complete)}`,
-          `  Code: ${s.bold(started.user_code)} (check it matches the page)`,
-          noWait ? "Then run `homebase login --resume`." : "Waiting for approval\u2026 (Ctrl-C to cancel)",
-          ""
-        ].join("\n")
-      );
+    if (ctx.apiSource === "env" && !sameOrigin(ctx.apiUrl, DEFAULT_API_URL) && !parsed.values.yes) {
+      const question = `HOMEBASE_API_URL points this login at ${origin(ctx.apiUrl)}, not ${origin(DEFAULT_API_URL)}. Sign in there and save a login for it?`;
+      const ok = !ctx.json && ctx.io.isTTY ? await ctx.confirm(question) : false;
+      if (!ok) {
+        throw usageError(
+          `Not logging in to ${origin(ctx.apiUrl)}: it comes from HOMEBASE_API_URL, which a project's environment can set without you noticing.`,
+          `If you meant it, run \`homebase login --api ${origin(ctx.apiUrl)}\` (or add --yes).`
+        );
+      }
     }
-    if (noWait) return;
-    await finishLogin(ctx, pending);
+    const profile = loginProfile(ctx);
+    const scopes = parseScopes(parsed.values.scopes);
+    const workspace = parseWorkspace(parsed.values.workspace);
+    const noWait = Boolean(parsed.values["no-wait"]);
+    const noBrowser = Boolean(parsed.values["no-browser"]);
+    const timeoutMs = Number(ctx.env.HOMEBASE_LOGIN_TIMEOUT_MS) > 0 ? Number(ctx.env.HOMEBASE_LOGIN_TIMEOUT_MS) : LOGIN_TIMEOUT_MS;
+    const headless = headlessReason(ctx.env);
+    if (parsed.values.device || noWait || headless) {
+      await deviceLogin(ctx, { noWait, noBrowser, scopes, workspace, profile, reason: parsed.values.device || noWait ? void 0 : headless });
+      return;
+    }
+    const browser = await browserLogin(ctx, { noBrowser, scopes, workspace, profile, timeoutMs });
+    if (!browser.done) await deviceLogin(ctx, { noWait: false, noBrowser, scopes, workspace, profile, reason: browser.reason });
   }
 };
-async function revokeSaved(ctx, token2, api) {
-  if (!token2) return { revoked: false, how: "none" };
-  try {
-    await new Api({ baseUrl: api, token: token2, fetch: ctx.fetch, sleep: ctx.sleep }).post("/v1/auth/revoke", {});
-    return { revoked: true, how: "revoked" };
-  } catch (error) {
-    if (isMissingRoute(error)) return { revoked: false, how: "unsupported", detail: "This Homebase server has no revoke call yet." };
-    if (error instanceof CliError && error.status === 401) return { revoked: true, how: "already_invalid", detail: "The token was already revoked or expired." };
-    return { revoked: false, how: "failed", detail: error instanceof Error ? error.message : String(error) };
-  }
-}
 var logout = {
   spec: {
     name: "logout",
-    summary: "Revoke this profile's token on the server and forget it on this computer.",
+    summary: "Sign this profile out: end its login on the server and forget it on this computer.",
     usage: "homebase logout [--profile <name>] [--keep-token] [--json]",
     options: { "keep-token": { type: "boolean", description: "Only forget it here; don't revoke it on the server" } },
     maxArgs: 0
   },
   async run(ctx, parsed) {
-    const info = ctx.store.readConfig().profiles[ctx.profile];
-    const saved = info ? ctx.store.token(ctx.profile)?.token : void 0;
-    const revoke = parsed.values["keep-token"] ? { revoked: false, how: "none" } : await revokeSaved(ctx, saved, info?.api ?? ctx.apiUrl);
+    const stored = ctx.store.session(ctx.profile);
+    const revoke = parsed.values["keep-token"] || !stored ? { revoked: false, how: "none" } : await revokeSession(ctx, stored.session);
     const removed = ctx.store.remove(ctx.profile);
     const revokeAt = settingsUrl(removed?.workspace?.url);
-    const note = removed && !revoke.revoked ? `${revoke.detail ? `${revoke.detail} ` : ""}The token still works until it is revoked: revoke \u201C${removed.tokenName ?? "Homebase CLI"}\u201D in Settings \u2192 Agents${revokeAt ? ` (${revokeAt})` : ""}.` : void 0;
+    const note = removed && !revoke.revoked ? `${revoke.detail ? `${revoke.detail} ` : ""}The login still works until it is revoked: revoke \u201C${removed.tokenName ?? "Homebase CLI"}\u201D in Settings \u2192 Agents${revokeAt ? ` (${revokeAt})` : ""}.` : void 0;
     if (ctx.json) {
       printJson(ctx.io, {
         profile: ctx.profile,
@@ -1075,7 +1883,7 @@ var logout = {
     }
     if (!removed) ctx.io.stdout(`No saved login for profile ${ctx.profile}.
 `);
-    else ctx.io.stdout(`Logged out of ${removed.workspace?.name ?? "Homebase"} (profile ${ctx.profile})${revoke.revoked ? "; the token is revoked" : ""}.
+    else ctx.io.stdout(`Logged out of ${removed.workspace?.name ?? "Homebase"} (profile ${ctx.profile})${revoke.revoked ? "; the login is revoked" : ""}.
 ${note ? `${note}
 ` : ""}`);
     if (ctx.env.HOMEBASE_TOKEN) ctx.io.stderr("HOMEBASE_TOKEN is still set in this shell; unset it to stop using that token.\n");
@@ -1096,8 +1904,10 @@ var whoami = {
   },
   async run(ctx) {
     const me = await ctx.api.get("/v1/me");
+    const session = ctx.auth instanceof ProfileAuth ? ctx.auth.current() : void 0;
+    const login2 = session ? canRefresh(session) ? { kind: "oauth", renews: true, access_expires_at: session.access_expires_at } : { kind: "legacy", renews: false } : { kind: ctx.tokenSource === "env" ? "env" : "none", renews: false };
     if (ctx.json) {
-      printJson(ctx.io, { profile: ctx.tokenSource === "env" ? null : ctx.profile, tokenSource: ctx.tokenSource, api: ctx.apiUrl, ...me });
+      printJson(ctx.io, { profile: ctx.tokenSource === "env" ? null : ctx.profile, tokenSource: ctx.tokenSource, api: ctx.apiUrl, login: login2, ...me });
       return;
     }
     const s = style(ctx.io);
@@ -1106,6 +1916,10 @@ var whoami = {
       [s.dim("You"), [me.user.name, me.user.email && `<${me.user.email}>`, me.user.role && `\xB7 ${me.user.role}`].filter(Boolean).join(" ")],
       [s.dim("Token"), `${me.token.name} \xB7 from ${ctx.tokenSource === "env" ? "HOMEBASE_TOKEN" : `profile ${ctx.profile} (${ctx.tokenSource})`}`],
       [s.dim("Permissions"), me.token.scopes.join(", ") || "none"],
+      [
+        s.dim("Login"),
+        login2.kind === "oauth" ? `renews itself (current access until ${shortDate(session?.access_expires_at)}${expiresAt(session) ? ` ${new Date(expiresAt(session)).toLocaleTimeString()}` : ""})` : login2.kind === "legacy" ? "older kind without renewal: run `homebase login` to upgrade" : "HOMEBASE_TOKEN"
+      ],
       [s.dim("Plan"), `${me.subscription?.plan ?? "?"} (${me.subscription?.status ?? "?"})`]
     ];
     if (me.workspace.url) rows.push([s.dim("Library"), me.workspace.url]);
@@ -1204,7 +2018,7 @@ function matchBucket(buckets2, ref) {
   if (partial.length > 1) return { ambiguous: partial };
   return void 0;
 }
-async function resolveBucket(api, ref) {
+async function resolveBucket(api, ref, opts = {}) {
   if (looksLikeId(ref)) return { id: ref };
   const match = matchBucket(await listAllBuckets(api), ref);
   if (!match) {
@@ -1217,6 +2031,10 @@ async function resolveBucket(api, ref) {
     throw usageError(
       `\u201C${ref}\u201D matches ${match.ambiguous.length} buckets: ${match.ambiguous.slice(0, 8).map((bucket) => `${bucket.name} (${bucket.id})`).join(", ")}. Use the exact name or the id.`
     );
+  }
+  const needle = ref.trim().toLowerCase();
+  if (opts.write && match.name.toLowerCase() !== needle && match.slug?.toLowerCase() !== needle) {
+    throw usageError(`\u201C${ref}\u201D only partly matches \u201C${match.name}\u201D. Changing a bucket needs its exact name or id; did you mean \u201C${match.name}\u201D (${match.id})?`);
   }
   return { id: match.id, name: match.name };
 }
@@ -1279,7 +2097,7 @@ function bucketMembership(action) {
     async run(ctx, parsed) {
       const [ref, ...ids] = parsed.positionals;
       if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
-      const bucket = await resolveBucket(ctx.api, ref);
+      const bucket = await resolveBucket(ctx.api, ref, { write: true });
       const result = await ctx.api.post(`/v1/buckets/${encodeURIComponent(bucket.id)}/assets`, {
         [action]: ids
       });
@@ -1408,14 +2226,14 @@ var shareLink = {
 var bucketCommands = [buckets, bucketCreate, bucketMembership("add"), bucketMembership("remove"), bucketLs, shareLink];
 
 // src/commands/library.ts
-import { createReadStream, createWriteStream, existsSync as existsSync2, mkdirSync as mkdirSync2, renameSync as renameSync2, statSync as statSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { createReadStream, createWriteStream, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename as basename2, join as join3, relative, resolve as resolve2 } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 // src/files.ts
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync as statSync2 } from "node:fs";
 import { basename, extname, join as join2, resolve, sep } from "node:path";
 var MIME = {
   png: "image/png",
@@ -1571,7 +2389,7 @@ function expandUploadArgs(args, opts) {
     const absolute = resolve(opts.cwd, arg);
     let stat;
     try {
-      stat = statSync(absolute);
+      stat = statSync2(absolute);
     } catch {
       stat = void 0;
     }
@@ -1865,25 +2683,36 @@ async function downloadOne(ctx, id, dir, force, showProgress) {
     return { id, title: asset.title, skipped: "This asset is a link to a web page, not a file.", url: link.url };
   }
   const part = join3(dir, `.${id}.homebase-part`);
+  const partTag = `${part}.etag`;
   let offset = 0;
+  let etag;
   try {
-    offset = statSync2(part).size;
+    offset = statSync3(part).size;
+    etag = readFileSync2(partTag, "utf8").trim() || void 0;
   } catch {
-    offset = 0;
+    etag = void 0;
   }
-  const response = await ctx.fetch(link.url, { method: "GET", headers: offset ? { Range: `bytes=${offset}-` } : {} });
+  if (!etag) offset = 0;
+  let response = await ctx.fetch(link.url, { method: "GET", headers: offset ? { Range: `bytes=${offset}-`, "If-Range": etag } : {} });
+  if (response.status === 416 || response.status === 206 && offset > 0 && response.headers.get("etag") !== null && response.headers.get("etag") !== etag) {
+    rmSync2(part, { force: true });
+    rmSync2(partTag, { force: true });
+    offset = 0;
+    response = await ctx.fetch(link.url, { method: "GET" });
+  }
   const name = downloadFilename({ title: asset.title, mimeType: asset.mimeType, contentDisposition: response.headers.get("content-disposition"), url: link.url });
   let target = join3(dir, name);
   if (!force) target = uniquePath(target, (candidate) => existsSync2(candidate));
-  if (response.status === 416) {
-    renameSync2(part, target);
-    return { id, title: asset.title, path: target, bytes: offset, resumed: true };
-  }
   if (!response.ok || !response.body) {
     throw new CliError(`Downloading \u201C${asset.title}\u201D failed (HTTP ${response.status}). The link may have expired; retry.`, { code: `http_${response.status}`, status: response.status });
   }
   const resumed = response.status === 206 && offset > 0;
-  if (!resumed) offset = 0;
+  if (!resumed) {
+    offset = 0;
+    const fresh = response.headers.get("etag");
+    if (fresh) writeFileSync2(partTag, fresh);
+    else rmSync2(partTag, { force: true });
+  }
   const length = Number(response.headers.get("content-length")) || void 0;
   const total = asset.size || (length !== void 0 ? offset + length : void 0);
   const meter = progressMeter(ctx.io, showProgress, name, total);
@@ -1893,8 +2722,9 @@ async function downloadOne(ctx, id, dir, force, showProgress) {
     createWriteStream(part, { flags: resumed ? "a" : "w" })
   );
   meter.finish();
-  const bytes = statSync2(part).size;
+  const bytes = statSync3(part).size;
   renameSync2(part, target);
+  rmSync2(partTag, { force: true });
   return { id, title: asset.title, path: target, bytes, resumed };
 }
 var download = {
@@ -1987,7 +2817,7 @@ function duplicateText(ref) {
 function duplicateHint(ref, opts) {
   const reuse = [];
   if (opts.tags.length) reuse.push(`homebase tag ${ref.id} --add ${opts.tags.join(",")}`);
-  for (const bucket of opts.buckets.filter((wanted) => !ref.buckets?.some((has) => has.id === wanted.id))) reuse.push(`homebase bucket add ${JSON.stringify(bucket.name ?? bucket.id)} ${ref.id}`);
+  for (const bucket of opts.buckets.filter((wanted) => !ref.buckets?.some((has) => has.id === wanted.id))) reuse.push(`homebase bucket add ${shellQuote(bucket.name ?? bucket.id)} ${ref.id}`);
   return [
     reuse.length ? `To reuse it: ${reuse.join(" && ")}.` : "",
     `To add a second copy anyway: ${opts.retry} --allow-duplicate.`
@@ -1996,7 +2826,7 @@ function duplicateHint(ref, opts) {
 async function bucketIdsFrom(ctx, value) {
   const refs = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
   const out = [];
-  for (const ref of refs) out.push(await resolveBucket(ctx.api, ref));
+  for (const ref of refs) out.push(await resolveBucket(ctx.api, ref, { write: true }));
   return out;
 }
 var upload = {
@@ -2031,12 +2861,12 @@ var upload = {
     const s = style(ctx.io);
     for (const file of files) {
       tried++;
-      const size = statSync2(file).size;
+      const size = statSync3(file).size;
       const mimeType = mimeFor(file);
       const shown = relative(ctx.cwd, file) || basename2(file);
       const noteDuplicate = async (found) => {
         const ref = await describeDuplicate(ctx, found);
-        const hint = duplicateHint(ref, { tags, buckets: buckets2, retry: `homebase upload ${JSON.stringify(shown)}` });
+        const hint = duplicateHint(ref, { tags, buckets: buckets2, retry: `homebase upload ${shellQuote(shown)}` });
         duplicates.push({ file: shown, duplicate_of: ref, hint });
         if (!ctx.json) ctx.io.stdout(`${s.yellow("=")} ${shown} is already in the library as ${duplicateText(ref)}; not uploaded again.
   ${hint}
@@ -2217,7 +3047,7 @@ var libraryCommands = [search, recent, get, versions, view, open, download, uplo
 
 // src/commands/setup.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { dirname, join as join4, resolve as resolve3 } from "node:path";
 
@@ -2244,11 +3074,11 @@ var SERVER_NAME = "homebase";
 function claudeCodeArgs(url, scope = "user") {
   return ["mcp", "add", "--transport", "http", "--scope", scope, SERVER_NAME, url];
 }
-function shellQuote(arg) {
+function shellQuote2(arg) {
   return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 function claudeCodeCommand(url, scope = "user") {
-  return ["claude", ...claudeCodeArgs(url, scope)].map(shellQuote).join(" ");
+  return ["claude", ...claudeCodeArgs(url, scope)].map(shellQuote2).join(" ");
 }
 function codexBlock(url, auth) {
   const lines = [`[mcp_servers.${SERVER_NAME}]`, `url = ${tomlString(url)}`];
@@ -2398,7 +3228,7 @@ async function connectCodex(ctx, url, opts) {
   const path = resolve3(ctx.cwd, opts.configPath ?? join4(codexHome, "config.toml"));
   const auth = opts.token ? { kind: "token-env", envVar: opts.tokenEnv } : { kind: "oauth" };
   const block = codexBlock(url, auth);
-  const before = existsSync3(path) ? readFileSync2(path, "utf8") : "";
+  const before = existsSync3(path) ? readFileSync3(path, "utf8") : "";
   const after = upsertCodexConfig(before, block);
   const diff = lineDiff(before, after, path);
   const next = opts.token ? `Codex sends the bearer token from $${opts.tokenEnv}. Create a key in Homebase Settings \u2192 Agents with only the permissions it needs, and give it to Codex the way you handle other secrets (a secrets manager or CI secret). Don't put tokens in shell profiles or dotfiles. ${CODEX_HEADLESS_NOTE}` : `Now run \`codex mcp login homebase\` and approve the workspace and permissions in your browser. ${CODEX_HEADLESS_NOTE}`;
@@ -2537,7 +3367,7 @@ var doctor = {
       status: "ok",
       detail: ctx.store.keychain ? `tokens are stored in ${ctx.store.keychain.name}` : `no OS keychain; tokens are stored in ${ctx.store.credentialsPath} (0600)`
     });
-    if (!ctx.token) {
+    if (!ctx.auth) {
       checks.push({ name: "token", status: "fail", detail: "Not logged in. Run `homebase login` (or set HOMEBASE_TOKEN).", exitCode: EXIT.auth });
     } else {
       try {
@@ -2582,32 +3412,55 @@ var doctor = {
     if (failed) throw Object.assign(new CliError(failed.detail, { exitCode: failed.exitCode ?? EXIT.other, code: `doctor_${failed.name}` }), { alreadyReported: true });
   }
 };
+var AGENT_ENV_MARKERS = [
+  "CI",
+  "GITHUB_ACTIONS",
+  "CLAUDECODE",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CODEX_SANDBOX",
+  "CODEX_THREAD_ID",
+  "CODEX_CI",
+  "CURSOR_AGENT",
+  "GEMINI_CLI",
+  "AI_AGENT"
+];
+function agentMarker(env) {
+  return AGENT_ENV_MARKERS.find((name) => {
+    const value = env[name];
+    return value !== void 0 && value !== "" && value !== "0" && value.toLowerCase() !== "false";
+  });
+}
 var token = {
   spec: {
     name: "token",
-    summary: "Print the saved token, only to a terminal. A secret: never paste it into a chat, file or shell profile.",
-    usage: "homebase token [--profile <name>] [--force]",
-    options: { force: { type: "boolean", description: "Print even when stdout isn't a terminal (pipes, agents, $(\u2026))" } },
+    summary: "Print the current access token, only to a person at a terminal. A secret: never paste it into a chat, file or shell profile.",
+    usage: "homebase token [--profile <name>]",
+    options: { force: { type: "boolean", description: "Allow stdout to be a pipe, when a person at an interactive terminal runs it" } },
     maxArgs: 0
   },
   async run(ctx, parsed) {
-    if (!ctx.token) throw new CliError("Not logged in. Run `homebase login` first.", { exitCode: EXIT.auth, code: "not_logged_in" });
+    if (!ctx.auth) throw new CliError("Not logged in. Run `homebase login` first.", { exitCode: EXIT.auth, code: "not_logged_in" });
+    const refuse = (why) => new CliError(
+      `Refusing to print the token: ${why} Agents never need the raw token: the CLI uses the saved login. For CI or another program, create a key with only the permissions it needs in Settings \u2192 Agents and store it as a secret.`,
+      { exitCode: EXIT.usage, code: "token_refused" }
+    );
+    const marker = agentMarker(ctx.env);
+    if (marker) throw refuse(`this looks like an AI agent or CI session (${marker} is set).`);
+    if (!ctx.io.stdinTTY) throw refuse("there's no person at an interactive terminal.");
     const toTerminal = ctx.io.stdoutTTY ?? ctx.io.isTTY;
-    if (!toTerminal && !parsed.values.force) {
-      throw new CliError(
-        "Refusing to print the token: stdout isn't a terminal, so it would land in a log, a pipe or an AI agent's context. Agents never need the raw token: the CLI uses the saved login. For CI, create a key in Settings \u2192 Agents and store it as a secret.",
-        { exitCode: EXIT.usage, code: "token_not_tty", hint: "A person who really needs it piped can add --force." }
-      );
-    }
-    if (toTerminal) ctx.io.stderr("This is a secret: don't share it or paste it into chats.\n");
-    ctx.io.stdout(ctx.token + "\n");
+    if (!toTerminal && !parsed.values.force) throw refuse("stdout isn't a terminal, so it would land in a log, a pipe or an AI agent's context.");
+    const value = await ctx.auth.token();
+    ctx.io.stderr(
+      ctx.auth instanceof ProfileAuth && canRefresh(ctx.auth.current()) ? "This is a secret that works for about an hour: don't share it or paste it into chats.\n" : "This is a secret: don't share it or paste it into chats.\n"
+    );
+    ctx.io.stdout(value + "\n");
   }
 };
 var setupCommands = [connect, doctor, token];
 
 // src/commands/trash.ts
-import { randomBytes } from "node:crypto";
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/capabilities.ts
@@ -2652,7 +3505,7 @@ function pendingPath(ctx) {
 }
 function readLocal(ctx) {
   try {
-    const data = JSON.parse(readFileSync3(pendingPath(ctx), "utf8"));
+    const data = JSON.parse(readFileSync4(pendingPath(ctx), "utf8"));
     return data && typeof data === "object" ? data : {};
   } catch {
     return {};
@@ -2699,24 +3552,25 @@ async function localPreview(ctx, ids) {
       else throw error;
     }
   }
-  const token2 = `local_${randomBytes(12).toString("hex")}`;
+  const token2 = `local_${randomBytes2(12).toString("hex")}`;
   if (assets.length) writeLocal(ctx, { ...readLocal(ctx), [token2]: { ids: assets.map((asset) => asset.id), api: ctx.apiUrl, expiresAt: Date.now() + LOCAL_TTL_S * 1e3 } });
   return { preview: true, assets, notFound, confirm_token: assets.length ? token2 : "", expires_in: LOCAL_TTL_S, source: "local" };
 }
 function bucketNote(bucket) {
-  if (bucket.clientLinkLive) return `\u201C${bucket.name}\u201D: client link is LIVE${bucket.clientOpened ? ", and the client has opened it" : ""}`;
-  if (bucket.clientLinkLive === false) return `\u201C${bucket.name}\u201D (client link off)`;
-  return `\u201C${bucket.name}\u201D${bucket.shareUrl ? " (has a client share page)" : ""}`;
+  const name = stripControl(bucket.name);
+  if (bucket.clientLinkLive) return `\u201C${name}\u201D: client link is LIVE${bucket.clientOpened ? ", and the client has opened it" : ""}`;
+  if (bucket.clientLinkLive === false) return `\u201C${name}\u201D (client link off)`;
+  return `\u201C${name}\u201D${bucket.shareUrl ? " (has a client share page)" : ""}`;
 }
 function renderPreview(ctx, preview) {
   const s = style(ctx.io);
   const n = preview.assets.length;
   const lines = [`This would move ${n} asset${n === 1 ? "" : "s"} to Recently deleted, removing ${n === 1 ? "it" : "them"} from every bucket and client share page:`];
   preview.assets.forEach((asset, index) => {
-    lines.push(`  ${index + 1}. ${s.bold(asset.title)}  (${asset.id}, ${asset.type})`);
+    lines.push(`  ${index + 1}. ${s.bold(stripControl(asset.title))}  (${stripControl(asset.id)}, ${stripControl(asset.type)})`);
     lines.push(asset.buckets.length ? `     in ${asset.buckets.map(bucketNote).join("; ")}` : "     in no bucket (library only)");
   });
-  if (preview.notFound.length) lines.push(`Not found (already gone or wrong id): ${preview.notFound.join(", ")}`);
+  if (preview.notFound.length) lines.push(`Not found (already gone or wrong id): ${preview.notFound.map(stripControl).join(", ")}`);
   const live = preview.assets.filter((asset) => asset.buckets.some((bucket) => bucket.clientLinkLive));
   if (live.length) lines.push(s.yellow(`Warning: ${live.length} of these ${live.length === 1 ? "is" : "are"} on a live client link. The client will stop seeing ${live.length === 1 ? "it" : "them"}.`));
   lines.push(`An owner or admin can restore them for 30 days.`);
@@ -2939,6 +3793,8 @@ function topHelp() {
     "",
     "Global options: --json, --api <url>, --profile <name>, -h/--help, --version",
     "Environment:    HOMEBASE_TOKEN, HOMEBASE_API_URL, HOMEBASE_PROFILE, HOMEBASE_CONFIG_DIR, HOMEBASE_NO_KEYCHAIN=1",
+    "Login:          homebase login signs in through your browser (one click if you're signed in there); over SSH or",
+    "                headless it uses --device. Logins renew themselves and are only sent to the API they came from.",
     "Exit codes:     0 ok \xB7 1 error \xB7 2 usage \xB7 3 auth/permission \xB7 4 limit reached (don't retry) \xB7 5 not found \xB7 6 needs the user's confirmation",
     "",
     'Start with: homebase login, then homebase search "latest logo files".'

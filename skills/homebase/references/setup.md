@@ -64,12 +64,15 @@ Also for `codex exec`: shell commands need `--sandbox workspace-write` with `san
 ## The CLI
 
 1. Use the plugin's bundled copy (`node <skill folder>/scripts/homebase.mjs`), or install it: until it's published, `cd <homebase repo>/cli && npm link`. It needs Node 20 or newer.
-2. `homebase login` opens Homebase's approval page, where you check the code, pick the workspace and choose the permissions. The token is stored in the OS keychain.
+2. `homebase login` opens Homebase in the browser. If the user is already signed in there, it's one click: the workspace and everyday permissions are preselected (still changeable), and Approve returns to the CLI on this computer. The login is stored in the OS keychain and renews itself (an hourly access token plus a rotating refresh token); Settings → Agents lists it as "Homebase CLI on <computer>" with Revoke.
+   - Pick the workspace up front: `homebase login --workspace <slug>`. Ask for specific permissions: `--scopes search,assets:read`.
    - A second workspace: `homebase login --profile <name>`.
-   - An agent can run `homebase login --json --no-browser` and show the user `verification_uri_complete`. If its shell would time out, add `--no-wait` and later run `homebase login --resume`.
+   - Over SSH, in CI or without a browser, the CLI switches to `homebase login --device` on its own: the user approves a code from any device.
+   - An agent can run `homebase login --json --no-browser` and show the user `authorize_url`, which must be opened in a browser on the same computer. If the user is on another device, or the agent's shell would time out, use `homebase login --device --json --no-wait`, show `verification_uri_complete`, and later run `homebase login --resume`.
 3. Check the setup with `homebase doctor`.
-4. CI: create a key in Homebase Settings → Agents with only the permissions the job needs, and provide it as `HOMEBASE_TOKEN` from your CI's secret store. Don't put tokens in shell profiles or dotfiles, and don't pipe `homebase token` anywhere (it refuses unless it's printing to a terminal).
-5. `homebase logout` revokes the token and forgets it.
+4. CI: create a key in Homebase Settings → Agents with only the permissions the job needs, and provide it as `HOMEBASE_TOKEN` from your CI's secret store. Don't put tokens in shell profiles or dotfiles. `homebase token` refuses to print anything under an agent or in CI.
+5. `homebase logout` ends the login on the server and forgets it here.
+6. A saved login is only ever sent to the API it was issued for. With `--api` or `HOMEBASE_API_URL` naming another server, the CLI needs a login for that server (or `HOMEBASE_TOKEN`) and otherwise stops with exit 2.
 
 ## Permissions
 

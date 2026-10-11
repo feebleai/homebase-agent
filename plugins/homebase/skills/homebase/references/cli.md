@@ -13,7 +13,7 @@ The global options can go anywhere in the command:
 | `--api <url>` | Which Homebase API to call. Also `HOMEBASE_API_URL` |
 | `--help` | Show help for the command |
 
-`HOMEBASE_TOKEN` overrides any saved login.
+`HOMEBASE_TOKEN` overrides any saved login. A saved login is only sent to the API it was issued for: never pass `--api` or set `HOMEBASE_API_URL` to a server the user didn't name, and if the CLI says the login is for another server (exit 2), tell the user rather than working around it.
 
 **Exit codes:**
 
@@ -39,10 +39,10 @@ The global options can go anywhere in the command:
 
 | Command | `--json` output |
 |---|---|
-| `homebase login [--no-browser] [--no-wait\|--resume]` | Prints `{"event":"login_started","verification_uri_complete","verification_uri","user_code","expires_at","profile","browser_opened","next_step"}` straight away, then `{"event":"logged_in","profile","workspace":{id,name,slug,url},"user":{name,email,role},"scopes":[…],"token_name","storage":"keychain"\|"file"}`. The `--no-wait` flag prints only the first line and exits; `--resume` finishes that login later |
-| `homebase whoami` (alias `status`) | `{profile, tokenSource:"env"\|"keychain"\|"file", api, workspace:{id,name,slug,url}, user:{id,name,email,role}, token:{id,name,scopes}, subscription:{plan,status}, usage:{period,resetsAt,used:{…},limits:{…}}, rateLimit:{perMinute,remaining}}` |
+| `homebase login [--workspace slug] [--scopes list] [--device] [--no-browser] [--no-wait\|--resume]` | Browser login (default): prints `{"event":"login_started","flow":"browser","authorize_url","redirect_uri","expires_at","profile","browser_opened","next_step"}` straight away. `authorize_url` must be opened on this same computer. Device login (`--device`, or chosen automatically over SSH, in CI or without a browser, with `why_device`): `{"event":"login_started","flow":"device","verification_uri_complete","verification_uri","user_code","expires_at","profile","browser_opened","next_step"}`, which can be opened anywhere. Then `{"event":"logged_in","profile","api","flow","workspace":{id,name,slug,url},"user":{name,email,role},"scopes":[…],"token_name","storage":"keychain"\|"file","renews":true}`. With `--device`, `--no-wait` prints only the first line and exits; `--resume` finishes that login later |
+| `homebase whoami` (alias `status`) | `{profile, tokenSource:"env"\|"keychain"\|"file", api, login:{kind:"oauth"\|"legacy"\|"env", renews, access_expires_at}, workspace:{id,name,slug,url}, user:{id,name,email,role}, token:{id,name,scopes}, subscription:{plan,status}, usage:{period,resetsAt,used:{…},limits:{…}}, rateLimit:{perMinute,remaining}}` |
 | `homebase profiles` / `homebase profiles use <name>` | `{defaultProfile, profiles:[{name,default,workspace,api,scopes,storage,savedAt}]}` |
-| `homebase logout [--keep-token]` | `{profile, removed, revoked, revoke:"revoked"\|"already_invalid"\|"unsupported"\|"failed", revoke_url, next_step}`. Revokes the saved token on the server (`POST /v1/auth/revoke`), then forgets it here. If the server can't revoke, `next_step` says to revoke it in Settings → Agents |
+| `homebase logout [--keep-token]` | `{profile, removed, revoked, revoke:"revoked"\|"already_invalid"\|"unsupported"\|"failed", revoke_url, next_step}`. Ends the saved login on the server it belongs to (its refresh chain), then forgets it here. If the server can't revoke, `next_step` says to revoke it in Settings → Agents |
 | `homebase doctor` | `{ok, api, mcp, checks:[{name,status:"ok"\|"warn"\|"fail",detail}]}` |
 
 ## Find
@@ -102,4 +102,4 @@ Upload limits: images up to 50 MB, documents and other files up to 200 MB. Video
 | Command | What it does |
 |---|---|
 | `homebase connect <claude-code\|codex\|cursor\|claude-desktop\|claude-ai\|chatgpt> [--print] [--yes] [--scope user\|project\|local] [--token]` | Sets up the MCP connection for that client (Codex: OAuth by default; `--token` uses a Settings key from `$HOMEBASE_TOKEN`). See [setup.md](setup.md) |
-| `homebase token [--force]` | Prints the raw token, only to a terminal (refuses pipes and agents unless `--force`). **Agents never run it**: the CLI uses the saved login |
+| `homebase token` | Prints the current access token to a person at an interactive terminal; always refused under an agent or in CI. **Agents never run it**: the CLI uses the saved login |
