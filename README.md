@@ -42,7 +42,7 @@ Add this repo as a plugin marketplace, or add the MCP URL under **Settings → M
 Use the MCP URL above. The server supports OAuth 2.1 (client ID metadata documents and dynamic client registration), or a key from **Settings → Agents** sent as `Authorization: Bearer`.
 
 ## The CLI
-The plugin bundles the CLI at `plugins/homebase/skills/homebase/scripts/homebase.mjs` (Node 20+). Run `node <path>/homebase.mjs login`, then try `search "latest files from the summer campaign"`. Every command accepts `--json`. See `skills/homebase/references/cli.md`.
+The plugin bundles the CLI at `plugins/homebase/skills/homebase/scripts/homebase.mjs` (Node 20+). It is built for agents: every command prints one JSON document, never prompts, and uploads or downloads in a single call. `node <path>/homebase.mjs login` opens a one-click browser approval; `homebase schema` prints the output contract. See `skills/homebase/references/cli.md`.
 
 ## Safety
 - **Deletes** always show a preview first and need a confirmation in a separate turn. They move assets to Recently deleted (restorable for 30 days) and never delete permanently.

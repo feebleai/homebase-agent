@@ -1,44 +1,28 @@
 #!/usr/bin/env node
-
-// src/args.ts
-import { parseArgs } from "node:util";
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
 
 // src/errors.ts
-var EXIT = {
-  ok: 0,
-  other: 1,
-  usage: 2,
-  auth: 3,
-  limit: 4,
-  notFound: 5,
-  /** A destructive action needs the user's explicit yes (delete preview printed). */
-  confirm: 6
-};
-var CliError = class extends Error {
-  exitCode;
-  code;
-  status;
-  server;
-  hint;
-  constructor(message, opts = {}) {
-    super(message);
-    this.name = "CliError";
-    this.exitCode = opts.exitCode ?? EXIT.other;
-    this.code = opts.code ?? "error";
-    this.status = opts.status;
-    this.server = opts.server;
-    this.hint = opts.hint;
-  }
-};
+function withData(error, data) {
+  error.data = { ...error.data, ...data };
+  return error;
+}
 function usageError(message, hint) {
   return new CliError(message, { exitCode: EXIT.usage, code: "usage", hint });
 }
-function exitCodeFor(status, code) {
+function exitCodeFor(status, code2) {
   if (status === 401) return EXIT.auth;
   if (status === 403) return EXIT.auth;
   if (status === 402 || status === 429) return EXIT.limit;
   if (status === 404) return EXIT.notFound;
-  if (code === "access_denied" || code === "expired_token") return EXIT.auth;
+  if (code2 === "access_denied" || code2 === "expired_token") return EXIT.auth;
   return EXIT.other;
 }
 function fromServer(status, body) {
@@ -53,8 +37,8 @@ function extractServerError(body) {
   if (!body || typeof body !== "object") return void 0;
   const error = body.error;
   if (!error || typeof error !== "object") return void 0;
-  const { code, message } = error;
-  if (typeof code !== "string" || typeof message !== "string") return void 0;
+  const { code: code2, message } = error;
+  if (typeof code2 !== "string" || typeof message !== "string") return void 0;
   return error;
 }
 function isMissingRoute(error, extra) {
@@ -72,29 +56,510 @@ function doNotRetryLine(error) {
   const when = server?.resets_at ?? (server?.retry_after_s !== void 0 ? new Date(Date.now() + server.retry_after_s * 1e3).toISOString() : void 0);
   return `Limit reached: do not retry until ${when ?? "the limit resets"}. Stop and tell the user${server?.upgrade_url ? ` (an owner can upgrade at ${server.upgrade_url})` : ""}.`;
 }
-function errorJson(error) {
+function errorBody(error) {
   const stop = doNotRetryLine(error);
   return {
-    error: {
-      ...stop ? { do_not_retry: stop } : {},
-      ...error.server ?? {},
-      code: error.code,
-      message: error.message,
-      ...error.status !== void 0 ? { status: error.status } : {},
-      ...error.hint ? { hint: error.hint } : {},
-      exit_code: error.exitCode
-    }
+    ...error.server ?? {},
+    code: error.code,
+    message: error.message,
+    ...stop ? { do_not_retry: stop } : {},
+    ...error.status !== void 0 ? { status: error.status } : {},
+    ...error.hint ? { hint: error.hint } : {},
+    exit_code: error.exitCode
   };
 }
+function errorJson(error) {
+  return { ok: false, schema: SCHEMA, ...error.data ?? {}, error: errorBody(error) };
+}
+var SCHEMA, EXIT, CliError;
+var init_errors = __esm({
+  "src/errors.ts"() {
+    "use strict";
+    SCHEMA = 1;
+    EXIT = {
+      ok: 0,
+      other: 1,
+      usage: 2,
+      auth: 3,
+      limit: 4,
+      notFound: 5,
+      /** A destructive action needs the user's explicit yes (delete preview printed). */
+      confirm: 6
+    };
+    CliError = class extends Error {
+      exitCode;
+      code;
+      status;
+      server;
+      hint;
+      /** What the command did before failing (uploaded, failed, a delete preview…): printed beside `error`. */
+      data;
+      constructor(message, opts = {}) {
+        super(message);
+        this.name = "CliError";
+        this.exitCode = opts.exitCode ?? EXIT.other;
+        this.code = opts.code ?? "error";
+        this.status = opts.status;
+        this.server = opts.server;
+        this.hint = opts.hint;
+        this.data = opts.data;
+      }
+    };
+  }
+});
+
+// src/constants.ts
+function mcpUrl(api) {
+  return `${api.replace(/\/+$/, "")}/mcp`;
+}
+var DEFAULT_API_URL, DEFAULT_CLIENT_ID, REFRESH_SKEW_MS, LOGIN_TIMEOUT_MS, CLI_VERSION, CLIENT_NAME, USER_AGENT, KEYCHAIN_SERVICE, ALL_SCOPES, MAX_AUTO_RETRY_S;
+var init_constants = __esm({
+  "src/constants.ts"() {
+    "use strict";
+    DEFAULT_API_URL = "https://next-caribou-11.convex.site";
+    DEFAULT_CLIENT_ID = "https://homebase-delta-seven.vercel.app/oauth/homebase-cli.json";
+    REFRESH_SKEW_MS = 5 * 60 * 1e3;
+    LOGIN_TIMEOUT_MS = 10 * 60 * 1e3;
+    CLI_VERSION = "0.1.0";
+    CLIENT_NAME = "Homebase CLI";
+    USER_AGENT = `homebase-cli/${CLI_VERSION} (node ${process.version}; ${process.platform})`;
+    KEYCHAIN_SERVICE = "homebase-cli";
+    ALL_SCOPES = ["search", "assets:read", "assets:write", "tags:write", "buckets:write", "assets:delete"];
+    MAX_AUTO_RETRY_S = 10;
+  }
+});
+
+// src/specs.ts
+function exitLine() {
+  return `Exit: ${Object.entries(EXIT_CODES).map(([code2, meaning]) => `${code2} ${meaning.split(":")[0].split(" (")[0]}`).join(" \xB7 ")}`;
+}
+function topHelp() {
+  const byName = new Map(SPECS.map((spec) => [spec.name, spec]));
+  const lines = [
+    `homebase ${CLI_VERSION}: the Homebase asset library for AI agents. Every command prints one JSON document on stdout.`,
+    ""
+  ];
+  for (const [title, names] of SECTIONS) {
+    lines.push(`${title}:`);
+    for (const name of names) {
+      const spec = byName.get(name);
+      if (spec) lines.push(`  ${spec.usage.replace(/^homebase /, "")}`);
+    }
+  }
+  lines.push(
+    "",
+    `Global: ${Object.entries(GLOBAL_OPTIONS).filter(([, spec]) => !spec.hidden).map(([name, spec]) => `--${name}${spec.type === "string" ? ` <${spec.value}>` : ""}`).join(" ")} (--json accepted, no effect)`,
+    "Env: HOMEBASE_TOKEN, HOMEBASE_API_URL, HOMEBASE_PROFILE, HOMEBASE_CONFIG_DIR, HOMEBASE_NO_KEYCHAIN=1",
+    `Output: ${ENVELOPE}`,
+    `Error: ${TYPES.Error}`,
+    "stderr: notices only, one JSON object per line: {notice,message}",
+    exitLine(),
+    "Details: homebase <command> --help \xB7 homebase schema"
+  );
+  return lines.join("\n");
+}
+function optionLine(name, spec) {
+  const flag = `${spec.short ? `-${spec.short}, ` : ""}--${name}${spec.type === "string" ? ` <${spec.value ?? "value"}>` : ""}${spec.multiple ? "\u2026" : ""}`;
+  return `  ${flag.padEnd(26)} ${spec.description ?? ""}`;
+}
+function withTypes(output) {
+  const used = Object.keys(TYPES).filter((name) => new RegExp(`\\b${name}\\b`).test(output));
+  return used.map((name) => `  ${name} = ${TYPES[name]}`);
+}
+function helpFor(spec) {
+  const lines = [spec.usage, spec.summary];
+  const options = Object.entries(spec.options ?? {});
+  if (options.length) lines.push("Flags:", ...options.map(([name, option]) => optionLine(name, option)));
+  lines.push(`Output: {"ok":true,"schema":1, ${spec.output}}`, ...withTypes(spec.output));
+  if (spec.exits) lines.push(`Exit: ${spec.exits}`);
+  lines.push(exitLine(), `Global: --profile <name> --api <url> --pretty`);
+  return lines.join("\n");
+}
+function groupHelp(group) {
+  return SPECS.filter((spec) => spec.name.startsWith(`${group} `)).map((spec) => spec.usage).join("\n");
+}
+function schemaJson(name) {
+  const pick = name ? SPECS.filter((spec) => spec.name === name || spec.aliases?.includes(name)) : SPECS;
+  return {
+    envelope: ENVELOPE,
+    error: TYPES.Error,
+    types: TYPES,
+    exitCodes: EXIT_CODES,
+    commands: Object.fromEntries(pick.map((spec) => [spec.name, { usage: spec.usage, output: spec.output, ...spec.exits ? { exits: spec.exits } : {} }])),
+    version: CLI_VERSION
+  };
+}
+var GLOBAL_OPTIONS, TYPES, EXIT_CODES, FULL, THUMBS, LIMIT, CURSOR, FILTERS, SEARCH_OUT, SPECS, SECTIONS, ENVELOPE;
+var init_specs = __esm({
+  "src/specs.ts"() {
+    "use strict";
+    init_constants();
+    GLOBAL_OPTIONS = {
+      profile: { type: "string", short: "p", value: "name", description: "Saved login to use (env HOMEBASE_PROFILE)" },
+      api: { type: "string", value: "url", description: "API base URL (env HOMEBASE_API_URL)" },
+      pretty: { type: "boolean", description: "Indent the JSON (debugging only)" },
+      json: { type: "boolean", description: "Accepted for compatibility; output is always JSON", hidden: true },
+      help: { type: "boolean", short: "h", description: "This reference" },
+      version: { type: "boolean", description: "Print the CLI version" }
+    };
+    TYPES = {
+      Item: "{id,title,type,buckets:[name],latestAt,tags:[],thumbnailUrl?}",
+      Asset: "{id,title,type,mimeType?,size?,source?,addedBy?,buckets:[name],tags:[],aiTags?,latestAt,uploadedAt,fileCreatedAt?,version?,versionsCount?,linkUrl?,appUrl,thumbnailUrl?,indexing?:{status,reason?},description?,visibleText?,truncated?}",
+      Created: "{id,title,type,buckets:[name],tags:[],linkUrl?}",
+      Bucket: "{id,name,itemCount,updatedAt}",
+      Error: "{code,message,exit_code,hint?,status?,do_not_retry?,resets_at?,retry_after_s?,limit?,upgrade_url?,missing_scopes?,duplicate_of?}"
+    };
+    EXIT_CODES = {
+      "0": "ok",
+      "1": "other error (network, server, unsupported_by_server)",
+      "2": "usage: fix the command",
+      "3": "auth or permission: not logged in, revoked, insufficient_scope",
+      "4": "limit reached (402/429): do not retry before resets_at",
+      "5": "not found",
+      "6": "confirmation required: delete preview printed, nothing deleted"
+    };
+    FULL = { type: "boolean", description: "Every field the server sends, text uncut" };
+    THUMBS = { type: "boolean", description: "Add thumbnailUrl to each asset" };
+    LIMIT = { type: "string", value: "n", description: "Results per page, 1-50 (default 24)" };
+    CURSOR = { type: "string", value: "c", description: "nextCursor from the previous page (valid 10 min)" };
+    FILTERS = {
+      type: { type: "string", value: "t", description: "image|document|video|link|embed|other" },
+      bucket: { type: "string", value: "b", description: "Bucket id, name, or none (in no bucket)" },
+      tag: { type: "string", value: "t", description: "Only assets with this tag" },
+      source: { type: "string", value: "s", description: "human|agent (who added it)" }
+    };
+    SEARCH_OUT = "interpretation:{buckets?:[name],dateRange?:{label,from,to},fileTypes?,tags?,terms?,source?,sort?,notes?,ignored?}, groups:[{label,kind:bucket|also|results,results:[Item]}], total, nextCursor?, textOnly?";
+    SPECS = [
+      /* ---- find ---- */
+      {
+        name: "search",
+        aliases: ["find"],
+        module: "library",
+        summary: "Search the library with the user's own words; the server reads buckets, seasons, dates, types, tags and 'latest'. No words: newest first.",
+        usage: 'homebase search ["<request>"] [--type t] [--bucket b] [--tag t] [--source s] [--ignore part]\u2026 [--limit n] [--cursor c] [--with-thumbnails] [--full]',
+        options: {
+          limit: LIMIT,
+          cursor: CURSOR,
+          ...FILTERS,
+          ignore: { type: "string", multiple: true, value: "part", description: "Drop part of the reading: buckets|date|fileTypes|tags|source|sort|text" },
+          "with-thumbnails": THUMBS,
+          full: FULL
+        },
+        output: SEARCH_OUT,
+        exits: "5 bucket not found"
+      },
+      {
+        name: "recent",
+        aliases: ["latest"],
+        module: "library",
+        summary: "Newest assets by latest version date, optionally filtered. Same output as search.",
+        usage: "homebase recent [--type t] [--bucket b] [--tag t] [--source s] [--limit n] [--cursor c] [--with-thumbnails] [--full]",
+        options: { limit: LIMIT, cursor: CURSOR, ...FILTERS, "with-thumbnails": THUMBS, full: FULL },
+        maxArgs: 0,
+        output: SEARCH_OUT
+      },
+      {
+        name: "get",
+        aliases: ["show"],
+        module: "library",
+        summary: "One asset: buckets, dates, tags, AI description and visible text (cut to 500 chars unless --full).",
+        usage: "homebase get <id> [--with-thumbnails] [--full]",
+        options: { "with-thumbnails": THUMBS, full: FULL },
+        minArgs: 1,
+        maxArgs: 1,
+        output: "...Asset"
+      },
+      {
+        name: "versions",
+        module: "library",
+        summary: "Version history, newest first. 'Latest' means the newest version date.",
+        usage: "homebase versions <id>",
+        minArgs: 1,
+        maxArgs: 1,
+        output: "id, title, currentVersion, versions:[{version,current,date,by?,note}]"
+      },
+      {
+        name: "view",
+        module: "library",
+        summary: "Save an asset's preview image (1280x720 JPEG) and print its path; read that file to see it. Takes an id, or the user's words: then the top search match is shown and the next ones are listed.",
+        usage: 'homebase view <id | "request"> [-o file] [--original]',
+        options: {
+          output: { type: "string", short: "o", value: "file", description: "Where to save (default: a temp file)" },
+          original: { type: "boolean", description: "The original image instead of the preview (images up to 20 MB)" }
+        },
+        minArgs: 1,
+        output: "id, title, path, kind:preview|original, bytes, contentType, search?:{query,alternatives:[{id,title,type}]}",
+        exits: "5 no match, or no preview (not an image, or not drawn yet: see error.message)"
+      },
+      {
+        name: "link",
+        aliases: ["open"],
+        module: "library",
+        summary: "A download link for the user: signed (valid 1 hour) for files, the URL itself for links.",
+        usage: "homebase link <id>",
+        minArgs: 1,
+        maxArgs: 1,
+        output: "id, url, kind:signed|link, expiresAt?"
+      },
+      {
+        name: "download",
+        module: "library",
+        summary: "Save files to disk with their real names; resumes partial downloads; up to 4 at once.",
+        usage: "homebase download <id>\u2026 [-o dir] [--force]",
+        options: {
+          output: { type: "string", short: "o", value: "dir", description: "Folder to save into (default: current folder)" },
+          force: { type: "boolean", description: "Overwrite same-named files instead of adding (2), (3)\u2026" }
+        },
+        minArgs: 1,
+        output: "downloaded:[{id,title,path,bytes,resumed}], skipped:[{id,reason,url}], failed:[{id,error:{code,message}}]"
+      },
+      {
+        name: "buckets",
+        module: "buckets",
+        summary: "The workspace's buckets (campaigns, client handoffs), newest first.",
+        usage: "homebase buckets [--limit n] [--cursor c] [--all] [--full]",
+        options: {
+          limit: { type: "string", value: "n", description: "Per page, 1-200 (default 100)" },
+          cursor: { type: "string", value: "c", description: "nextCursor from the previous page" },
+          all: { type: "boolean", description: "Every page" },
+          full: FULL
+        },
+        maxArgs: 0,
+        output: "buckets:[Bucket], nextCursor?"
+      },
+      {
+        name: "bucket ls",
+        aliases: ["bucket list", "bucket show"],
+        module: "buckets",
+        summary: "A bucket's assets in the bucket's order.",
+        usage: "homebase bucket ls <bucket> [--limit n] [--cursor c] [--all] [--with-thumbnails] [--full]",
+        options: {
+          limit: { type: "string", value: "n", description: "Per page, 1-200 (default 100)" },
+          cursor: { type: "string", value: "c", description: "nextCursor from the previous page" },
+          all: { type: "boolean", description: "Every page" },
+          "with-thumbnails": THUMBS,
+          full: FULL
+        },
+        minArgs: 1,
+        output: "bucket:{id,name}, assets:[{id,title,type,latestAt,addedAt,tags:[],thumbnailUrl?}], nextCursor?",
+        exits: "5 bucket not found"
+      },
+      {
+        name: "share-link",
+        module: "buckets",
+        summary: "A bucket's client share link, for the user to send. Never send it yourself.",
+        usage: "homebase share-link <bucket>",
+        minArgs: 1,
+        output: "bucket:{id,name}, url, itemCount?, clientOpened?, note"
+      },
+      /* ---- change ---- */
+      {
+        name: "upload",
+        module: "library",
+        summary: "Upload local files (presigned PUT done here, 4 at once), optionally tagged and into buckets. Needs assets:write.",
+        usage: "homebase upload <file|dir|glob>\u2026 [--bucket b]\u2026 [--tag t]\u2026 [--title t] [-r] [--allow-duplicate]",
+        options: {
+          bucket: { type: "string", multiple: true, value: "b", description: "Also put it in this bucket: id or exact name (needs buckets:write)" },
+          tag: { type: "string", multiple: true, value: "t", description: "Tag it (repeat or comma-separate)" },
+          title: { type: "string", value: "t", description: "Title, one file only (default: from the filename)" },
+          recursive: { type: "boolean", short: "r", description: "Folders' contents, including subfolders" },
+          "allow-duplicate": { type: "boolean", description: "Upload even if the same bytes are already in the library" }
+        },
+        minArgs: 1,
+        output: "uploaded:[{file,...Created}], duplicates:[{file,duplicate_of:{id,title,buckets:[name]},hint}], failed:[{file,error:{code,message}}], notTried:[file]",
+        exits: "on a failure: ok:false with these lists and error = the first failure; stops at auth (3) or limit (4)"
+      },
+      {
+        name: "import",
+        module: "library",
+        summary: "Add a URL: image/PDF/document URLs are fetched and stored like uploads; web pages become links.",
+        usage: "homebase import <url> [--title t] [--tag t]\u2026 [--bucket b]\u2026 [--link] [--allow-duplicate]",
+        options: {
+          title: { type: "string", value: "t", description: "Title (default: file name or page title)" },
+          tag: { type: "string", multiple: true, value: "t", description: "Tag it" },
+          bucket: { type: "string", multiple: true, value: "b", description: "Also put it in this bucket: id or exact name" },
+          link: { type: "boolean", description: "Save as a link even if it's a file" },
+          "allow-duplicate": { type: "boolean", description: "Add it even if it's already in the library" }
+        },
+        minArgs: 1,
+        maxArgs: 1,
+        output: "imported:true, importedAs:file|link, ...Created  |  imported:false, duplicate_of:{id,title,buckets:[name]}, hint"
+      },
+      {
+        name: "tag",
+        module: "library",
+        summary: "Add or remove tags (free-form; case and spacing don't matter). Needs tags:write.",
+        usage: "homebase tag <id>\u2026 [--add t]\u2026 [--remove t]\u2026",
+        options: {
+          add: { type: "string", multiple: true, value: "t", description: "Tag to add (repeat or comma-separate)" },
+          remove: { type: "string", multiple: true, value: "t", description: "Tag to remove" }
+        },
+        minArgs: 1,
+        output: "results:[{id,tags:[],added,removed}]"
+      },
+      {
+        name: "rename",
+        module: "library",
+        summary: "Rename an asset (only when the user asked or agreed). Needs assets:write.",
+        usage: "homebase rename <id> <new title\u2026>",
+        minArgs: 2,
+        output: "id, title"
+      },
+      {
+        name: "bucket create",
+        module: "buckets",
+        summary: "Create a bucket. Check `buckets` first; ask before creating one the user didn't name. Needs buckets:write.",
+        usage: "homebase bucket create <name\u2026> [--description text]",
+        options: { description: { type: "string", value: "text", description: "What the bucket is for" } },
+        minArgs: 1,
+        output: "...Bucket, shareUrl?"
+      },
+      {
+        name: "bucket add",
+        module: "buckets",
+        summary: "Add library assets to a bucket (linked, not copied). Needs buckets:write.",
+        usage: "homebase bucket add <bucket> <id>\u2026",
+        minArgs: 2,
+        output: "bucket:{id,name}, added, notFound:[id]",
+        exits: "2 bucket name only partly matches (use the exact name or id)"
+      },
+      {
+        name: "bucket remove",
+        module: "buckets",
+        summary: "Take assets out of a bucket; they stay in the library. Needs buckets:write.",
+        usage: "homebase bucket remove <bucket> <id>\u2026",
+        minArgs: 2,
+        output: "bucket:{id,name}, removed, notFound:[id]",
+        exits: "2 bucket name only partly matches (use the exact name or id)"
+      },
+      /* ---- delete ---- */
+      {
+        name: "delete",
+        module: "trash",
+        summary: "Move assets to Recently deleted (restorable 30 days). Two calls: without --confirm-token it previews and exits 6. Show the preview, get the user's yes in a new message, then call again with the token.",
+        usage: "homebase delete <id>\u2026 [--confirm-token t]",
+        options: { "confirm-token": { type: "string", value: "t", description: "From the preview, only after the user said yes in a new message" } },
+        minArgs: 1,
+        output: "preview (exit 6, ok:false): confirmation_required:true, assets:[{id,title,type,buckets:[{name,clientLinkLive?,clientOpened?}]}], notFound, confirm_token, expires_in, next_step  |  confirmed: deleted:[id], notFound:[id], restorable",
+        exits: "6 preview printed, nothing deleted; 6 confirm_token invalid, expired or for other ids"
+      },
+      {
+        name: "deleted",
+        module: "trash",
+        summary: "Recently deleted assets (restorable 30 days by an owner or admin).",
+        usage: "homebase deleted [--limit n] [--cursor c]",
+        options: {
+          limit: { type: "string", value: "n", description: "Per page, 1-100 (default 50)" },
+          cursor: { type: "string", value: "c", description: "nextCursor from the previous page" }
+        },
+        maxArgs: 0,
+        output: "assets:[{id,title,type,deletedAt,purgeAt,buckets:[name]}], nextCursor?"
+      },
+      {
+        name: "restore",
+        module: "trash",
+        summary: "Bring assets back from Recently deleted into their buckets (owner or admin).",
+        usage: "homebase restore <id>\u2026",
+        minArgs: 1,
+        output: "restored:[id], notFound:[id]"
+      },
+      /* ---- account ---- */
+      {
+        name: "login",
+        module: "auth",
+        summary: "Sign in; a person approves in the browser. Prints login_started at once (relay verification_url and user_code), waits, then prints logged_in. --device --no-wait returns at once; finish with --resume.",
+        usage: "homebase login [--device] [--no-wait | --resume] [--no-browser] [--workspace slug] [--scopes list]",
+        options: {
+          device: { type: "boolean", description: "Code approved on any device (chosen automatically over SSH, in CI, without a browser)" },
+          "no-wait": { type: "boolean", description: "Device login: print login_started and exit; finish with --resume" },
+          resume: { type: "boolean", description: "Finish a --no-wait device login (waits for the approval)" },
+          "no-browser": { type: "boolean", description: "Don't open a browser on this computer" },
+          workspace: { type: "string", value: "slug", description: "Preselect this workspace on the approval page" },
+          scopes: { type: "string", value: "list", description: "Comma-separated: search,assets:read,assets:write,tags:write,buckets:write,assets:delete" }
+        },
+        maxArgs: 0,
+        output: "1st line: event:login_started, flow:browser|device, verification_url, user_code?, expires_at, browser_opened, next_step. 2nd line: event:logged_in, profile, api, workspace:{name,slug}, user:{name,email,role}, scopes, storage:keychain|file",
+        exits: "3 denied or expired; 2 HOMEBASE_API_URL names another server (pass --api to mean it)"
+      },
+      {
+        name: "logout",
+        module: "auth",
+        summary: "End this profile's login on its server and forget it here.",
+        usage: "homebase logout [--keep-token]",
+        options: { "keep-token": { type: "boolean", description: "Only forget it here; don't revoke it on the server" } },
+        maxArgs: 0,
+        output: "profile, removed, revoked, revoke?:revoked|already_invalid|unsupported|failed, revoke_url?, next_step?"
+      },
+      {
+        name: "whoami",
+        aliases: ["status"],
+        module: "auth",
+        summary: "Workspace, user, permissions and this month's usage for the current login.",
+        usage: "homebase whoami",
+        maxArgs: 0,
+        output: "profile, tokenSource:env|keychain|file, api, login:{kind,renews,access_expires_at?}, workspace:{id,name,slug,url}, user:{id,name,email,role}, token:{name,scopes}, subscription?, usage?, rateLimit?"
+      },
+      {
+        name: "profiles",
+        module: "auth",
+        summary: "Saved logins.",
+        usage: "homebase profiles",
+        maxArgs: 0,
+        output: "defaultProfile, profiles:[{name,default,workspace,api,scopes,storage,savedAt}]"
+      },
+      {
+        name: "profiles use",
+        module: "auth",
+        summary: "Make a saved profile the default.",
+        usage: "homebase profiles use <name>",
+        minArgs: 1,
+        maxArgs: 1,
+        output: "defaultProfile"
+      },
+      {
+        name: "connect",
+        module: "setup",
+        summary: "Plan an MCP connection for a client: claude-code|codex|cursor|claude-desktop|claude-ai|chatgpt. Changes nothing unless --write (only after the user agreed).",
+        usage: "homebase connect [client] [--write] [--scope user|project|local] [--token [--token-env VAR]] [--config path]",
+        options: {
+          write: { type: "boolean", description: "Apply: run `claude mcp add` / write Codex config.toml" },
+          scope: { type: "string", value: "s", description: "claude-code: user (default), project or local" },
+          token: { type: "boolean", description: "codex: send a Settings key from an env var instead of OAuth" },
+          "token-env": { type: "string", value: "VAR", description: "codex --token: the env var (default HOMEBASE_TOKEN)" },
+          config: { type: "string", value: "path", description: "codex: config.toml to edit (default $CODEX_HOME/config.toml)" }
+        },
+        maxArgs: 1,
+        output: "client, url, applied, command?|diff?|steps?|config?, next_step"
+      },
+      {
+        name: "doctor",
+        module: "setup",
+        summary: "Check the API, login, permissions, usage and the MCP endpoint.",
+        usage: "homebase doctor",
+        maxArgs: 0,
+        output: "api, mcp, checks:[{name,status:ok|warn|fail,detail}]",
+        exits: "the failing check's code (3 auth, 4 limit, 1 other)"
+      },
+      {
+        name: "schema",
+        module: "schema",
+        summary: "The JSON output contract: envelope, shared types, exit codes and every command's output.",
+        usage: "homebase schema [command]",
+        output: "envelope, error, types, exitCodes, commands:{name:{usage,output,exits?}}"
+      }
+    ];
+    SECTIONS = [
+      ["Find", ["search", "recent", "get", "versions", "view", "link", "download", "buckets", "bucket ls", "share-link"]],
+      ["Change", ["upload", "import", "tag", "rename", "bucket create", "bucket add", "bucket remove"]],
+      ["Delete", ["delete", "deleted", "restore"]],
+      ["Account", ["login", "logout", "whoami", "profiles", "profiles use", "connect", "doctor", "schema"]]
+    ];
+    ENVELOPE = '{"ok":true,"schema":1,...output}  failure: {"ok":false,"schema":1,"error":Error,...partial output}';
+  }
+});
 
 // src/args.ts
-var GLOBAL_OPTIONS = {
-  json: { type: "boolean", description: "Print one compact JSON document (stable shape) instead of human output" },
-  api: { type: "string", value: "url", description: "API base URL (env HOMEBASE_API_URL)" },
-  profile: { type: "string", short: "p", value: "name", description: "Saved login to use (env HOMEBASE_PROFILE)" },
-  help: { type: "boolean", short: "h", description: "Show help" },
-  version: { type: "boolean", description: "Print the CLI version" }
-};
+import { parseArgs } from "node:util";
 function globalValueOptions() {
   const names = /* @__PURE__ */ new Set();
   for (const [name, spec] of Object.entries(GLOBAL_OPTIONS)) {
@@ -109,22 +574,22 @@ function commandWordIndexes(argv, groups) {
   const takesValue = globalValueOptions();
   const indexes = [];
   for (let i = 0; i < argv.length; i++) {
-    const token2 = argv[i];
-    if (token2 === "--") break;
-    if (token2.startsWith("-")) {
-      if (takesValue.has(token2)) i++;
+    const token = argv[i];
+    if (token === "--") break;
+    if (token.startsWith("-")) {
+      if (takesValue.has(token)) i++;
       continue;
     }
     indexes.push(i);
-    if (indexes.length === 1 && groups.has(token2)) continue;
+    if (indexes.length === 1 && groups.has(token)) continue;
     break;
   }
   return indexes;
 }
-function parseCommandLine(argv, commands) {
+function parseCommandLine(argv, commands6) {
   const byName = /* @__PURE__ */ new Map();
   const groups = /* @__PURE__ */ new Set();
-  for (const command2 of commands) {
+  for (const command2 of commands6) {
     for (const name of [command2.name, ...command2.aliases ?? []]) byName.set(name, command2);
     if (command2.name.includes(" ")) groups.add(command2.name.split(" ")[0]);
   }
@@ -201,57 +666,1328 @@ function stringOption(value) {
   if (Array.isArray(value)) return value[value.length - 1];
   return void 0;
 }
-function helpFor(command) {
-  const lines = [command.summary, "", `Usage: ${command.usage}`];
-  const options = Object.entries(command.options ?? {});
-  if (options.length) {
-    lines.push("", "Options:");
-    for (const [name, spec] of options) lines.push(optionLine(name, spec));
+var init_args = __esm({
+  "src/args.ts"() {
+    "use strict";
+    init_errors();
+    init_specs();
   }
-  lines.push("", "Global options:");
-  for (const [name, spec] of Object.entries(GLOBAL_OPTIONS)) lines.push(optionLine(name, spec));
-  if (command.examples?.length) lines.push("", "Examples:", ...command.examples.map((example) => `  ${example}`));
-  return lines.join("\n");
-}
-function optionLine(name, spec) {
-  const flag = `${spec.short ? `-${spec.short}, ` : "    "}--${name}${spec.type === "string" ? ` <${spec.value ?? "value"}>` : ""}${spec.multiple ? "\u2026" : ""}`;
-  return `  ${flag.padEnd(28)} ${spec.description ?? ""}`;
-}
+});
 
-// src/constants.ts
-var DEFAULT_API_URL = "https://next-caribou-11.convex.site";
-var DEFAULT_CLIENT_ID = "https://homebase-delta-seven.vercel.app/oauth/homebase-cli.json";
-var REFRESH_SKEW_MS = 5 * 60 * 1e3;
-var LOGIN_TIMEOUT_MS = 10 * 60 * 1e3;
-var CLI_VERSION = "0.1.0";
-var CLIENT_NAME = "Homebase CLI";
-var USER_AGENT = `homebase-cli/${CLI_VERSION} (node ${process.version}; ${process.platform})`;
-var KEYCHAIN_SERVICE = "homebase-cli";
-var ALL_SCOPES = ["search", "assets:read", "assets:write", "tags:write", "buckets:write", "assets:delete"];
-var SCOPE_LABELS = {
-  search: "Search and read details",
-  "assets:read": "Download files",
-  "assets:write": "Upload and rename",
-  "tags:write": "Tag assets",
-  "buckets:write": "Manage buckets",
-  "assets:delete": "Delete assets (soft)",
-  "handoffs:write": "Draft handoffs"
-};
-var MAX_AUTO_RETRY_S = 10;
-function mcpUrl(api) {
-  return `${api.replace(/\/+$/, "")}/mcp`;
+// src/output.ts
+function processIo() {
+  return {
+    stdout: (text) => process.stdout.write(text),
+    stderr: (text) => process.stderr.write(text)
+  };
 }
+function formatJson(value, pretty = false) {
+  return JSON.stringify(value, null, pretty ? 2 : void 0) + "\n";
+}
+function okJson(data) {
+  return { ok: true, schema: SCHEMA, ...data };
+}
+function isoFromMs(value) {
+  if (typeof value === "string" && value) return value;
+  return typeof value === "number" && Number.isFinite(value) ? new Date(value).toISOString() : void 0;
+}
+function isoDates(item) {
+  const out = { ...item };
+  for (const key of DATE_KEYS) if (typeof out[key] === "number") out[key] = isoFromMs(out[key]);
+  return out;
+}
+function bucketNames(buckets2) {
+  if (!Array.isArray(buckets2)) return [];
+  return buckets2.map((bucket) => typeof bucket === "string" ? bucket : String(bucket?.name ?? "")).filter(Boolean);
+}
+function cut(text, max = TEXT_LIMIT) {
+  if (text.length <= max) return { text, truncated: false };
+  const slice = text.slice(0, max);
+  const space = slice.lastIndexOf(" ");
+  return { text: `${(space > max * 0.8 ? slice.slice(0, space) : slice).trimEnd()}\u2026`, truncated: true };
+}
+function shellQuote(text) {
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+function compact(value) {
+  for (const key of Object.keys(value)) if (value[key] === void 0 || value[key] === "") delete value[key];
+  return value;
+}
+function listItemJson(item, view2) {
+  if (view2.full) return isoDates({ ...item });
+  return compact({
+    id: item.id,
+    title: item.title,
+    type: item.type,
+    buckets: bucketNames(item.buckets),
+    latestAt: isoFromMs(item.latestAt ?? item.uploadedAt),
+    tags: item.tags ?? [],
+    thumbnailUrl: view2.thumbnails ? item.thumbnailUrl ?? item.thumb : void 0
+  });
+}
+function interpretationJson(interpretation, full = false) {
+  if (!interpretation) return void 0;
+  const range = interpretation.dateRange;
+  if (full) {
+    const out2 = { ...interpretation };
+    if (range && typeof range === "object") out2.dateRange = { ...range, from: isoFromMs(range.from) ?? range.from, to: isoFromMs(range.to) ?? range.to };
+    return out2;
+  }
+  const out = {};
+  const buckets2 = bucketNames(interpretation.buckets);
+  if (buckets2.length) out.buckets = buckets2;
+  if (range && typeof range === "object") out.dateRange = compact({ label: range.label, from: isoFromMs(range.from), to: isoFromMs(range.to) });
+  for (const key of ["fileTypes", "tags", "terms"]) {
+    const list = interpretation[key];
+    if (Array.isArray(list) && list.length) out[key] = list;
+  }
+  if (typeof interpretation.source === "string") out.source = interpretation.source;
+  if (typeof interpretation.sort === "string" && interpretation.sort !== "relevance") out.sort = interpretation.sort;
+  for (const key of ["notes", "ignored"]) {
+    const list = interpretation[key];
+    if (Array.isArray(list) && list.length) out[key] = list;
+  }
+  return out;
+}
+function searchJson(response, view2) {
+  return compact({
+    interpretation: interpretationJson(response.interpretation, view2.full),
+    groups: (response.groups ?? []).filter((group) => group.results?.length).map((group) => ({ label: group.label, kind: group.kind, results: (group.results ?? []).map((result) => listItemJson(result, view2)) })),
+    total: response.total ?? 0,
+    nextCursor: response.nextCursor ?? void 0,
+    textOnly: response.textOnly ? true : void 0
+  });
+}
+function assetJson(asset, view2) {
+  if (view2.full) return isoDates({ ...asset });
+  const description = cut(asset.description ?? "");
+  const visibleText = cut(asset.visibleText ?? "");
+  const indexing = asset.indexing?.status && asset.indexing.status !== "done" ? compact({ status: asset.indexing.status, reason: asset.indexing.reason }) : void 0;
+  return compact({
+    id: asset.id,
+    title: asset.title,
+    type: asset.type,
+    mimeType: asset.mimeType,
+    size: asset.size ? asset.size : void 0,
+    source: asset.source,
+    addedBy: asset.addedBy,
+    buckets: bucketNames(asset.buckets),
+    tags: asset.tags ?? [],
+    aiTags: asset.aiTags?.length ? asset.aiTags : void 0,
+    latestAt: isoFromMs(asset.latestAt ?? asset.uploadedAt),
+    uploadedAt: isoFromMs(asset.uploadedAt),
+    fileCreatedAt: isoFromMs(asset.fileCreatedAt),
+    version: (asset.versionsCount ?? 0) > 1 ? asset.version : void 0,
+    versionsCount: (asset.versionsCount ?? 0) > 1 ? asset.versionsCount : void 0,
+    linkUrl: asset.linkUrl,
+    appUrl: asset.appUrl ?? asset.url,
+    thumbnailUrl: view2.thumbnails ? asset.thumbnailUrl : void 0,
+    indexing,
+    description: description.text,
+    visibleText: visibleText.text,
+    truncated: description.truncated || visibleText.truncated ? true : void 0
+  });
+}
+function createdJson(asset) {
+  return compact({
+    id: asset.id,
+    title: asset.title,
+    type: asset.type,
+    buckets: bucketNames(asset.buckets),
+    tags: asset.tags ?? [],
+    linkUrl: asset.linkUrl
+  });
+}
+function bucketJson(bucket, view2) {
+  if (view2.full) return isoDates({ ...bucket });
+  return compact({ id: bucket.id, name: bucket.name, itemCount: bucket.itemCount ?? 0, updatedAt: isoFromMs(bucket.updatedAt ?? bucket.createdAt) });
+}
+var TEXT_LIMIT, DATE_KEYS;
+var init_output = __esm({
+  "src/output.ts"() {
+    "use strict";
+    init_errors();
+    TEXT_LIMIT = 500;
+    DATE_KEYS = ["addedAt", "latestAt", "uploadedAt", "updatedAt", "fileCreatedAt", "createdAt", "deletedAt", "purgeAt", "date", "expiresAt"];
+  }
+});
 
-// src/context.ts
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
+// src/files.ts
+import { readdirSync, statSync } from "node:fs";
+import { basename, extname, join, resolve, sep } from "node:path";
+function mimeFor(path) {
+  return MIME[extname(path).slice(1).toLowerCase()] ?? "application/octet-stream";
+}
+function extensionFor(mimeType) {
+  if (!mimeType) return void 0;
+  const clean = mimeType.split(";")[0].trim().toLowerCase();
+  if (EXTENSION_FOR[clean]) return EXTENSION_FOR[clean];
+  return Object.entries(MIME).find(([, mime]) => mime === clean)?.[0];
+}
+function safeFilename(name) {
+  const cleaned = name.replace(/[\u0000-\u001f<>:"/\\|?*]+/g, " ").replace(/\s+/g, " ").trim().replace(/^\.+/, "").slice(0, 180);
+  return cleaned || "download";
+}
+function downloadFilename(opts) {
+  const fromHeader = filenameFromDisposition(opts.contentDisposition);
+  if (fromHeader) return safeFilename(fromHeader);
+  const ext = extensionFor(opts.mimeType) ?? urlExtension(opts.url);
+  const title = safeFilename(opts.title);
+  if (!ext) return title;
+  const current = extname(title).slice(1).toLowerCase();
+  if (current === ext || ext === "jpg" && current === "jpeg") return title;
+  return `${title}.${ext}`;
+}
+function urlExtension(url) {
+  if (!url) return void 0;
+  try {
+    const ext = extname(new URL(url).pathname).slice(1).toLowerCase();
+    return ext && ext.length <= 5 && MIME[ext] ? ext : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function filenameFromDisposition(header) {
+  if (!header) return void 0;
+  const star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(header);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+    }
+  }
+  const plain = /filename\s*=\s*"?([^";]+)"?/.exec(header);
+  return plain?.[1]?.trim() || void 0;
+}
+function uniquePath(path, exists) {
+  if (!exists(path)) return path;
+  const ext = extname(path);
+  const stem = path.slice(0, path.length - ext.length);
+  for (let n = 2; n < 1e3; n++) {
+    const candidate = `${stem} (${n})${ext}`;
+    if (!exists(candidate)) return candidate;
+  }
+  return `${stem} (${Date.now()})${ext}`;
+}
+function globToRegExp(pattern) {
+  let out = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+    if (char === "*") {
+      if (pattern[i + 1] === "*") {
+        const slash = pattern[i + 2] === "/";
+        out += slash ? "(?:.*/)?" : ".*";
+        i += slash ? 2 : 1;
+      } else out += "[^/]*";
+    } else if (char === "?") out += "[^/]";
+    else if (char === "[") {
+      const end = pattern.indexOf("]", i);
+      if (end === -1) out += "\\[";
+      else {
+        out += `[${pattern.slice(i + 1, end).replace(/\\/g, "\\\\")}]`;
+        i = end;
+      }
+    } else out += char.replace(/[.+^${}()|\\]/g, "\\$&");
+  }
+  return new RegExp(`^${out}$`);
+}
+function walk(dir, recursive, out) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.name.startsWith(".")) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (recursive) walk(full, recursive, out);
+    } else if (entry.isFile()) out.push(full);
+  }
+}
+function expandUploadArgs(args, opts) {
+  const files = [];
+  for (const arg of args) {
+    const absolute = resolve(opts.cwd, arg);
+    let stat;
+    try {
+      stat = statSync(absolute);
+    } catch {
+      stat = void 0;
+    }
+    if (stat?.isFile()) {
+      files.push(absolute);
+      continue;
+    }
+    if (stat?.isDirectory()) {
+      if (!opts.recursive) throw usageError(`${arg} is a folder. Pass --recursive to upload everything in it.`);
+      walk(absolute, true, files);
+      continue;
+    }
+    if (GLOB_CHARS.test(arg)) {
+      const normalized = absolute.split(sep).join("/");
+      const parts = normalized.split("/");
+      const firstGlob = parts.findIndex((part) => GLOB_CHARS.test(part));
+      const base = parts.slice(0, firstGlob).join("/") || "/";
+      const regex = globToRegExp(normalized);
+      const deep = normalized.includes("**") || parts.length - firstGlob > 1;
+      const candidates = [];
+      walk(base, deep, candidates);
+      const matched = candidates.filter((candidate) => regex.test(candidate.split(sep).join("/")));
+      if (!matched.length) throw usageError(`No files match ${arg}.`);
+      files.push(...matched);
+      continue;
+    }
+    throw usageError(`No such file: ${arg}`);
+  }
+  return [...new Set(files)];
+}
+var MIME, EXTENSION_FOR, GLOB_CHARS;
+var init_files = __esm({
+  "src/files.ts"() {
+    "use strict";
+    init_errors();
+    MIME = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      webp: "image/webp",
+      avif: "image/avif",
+      svg: "image/svg+xml",
+      heic: "image/heic",
+      heif: "image/heif",
+      tif: "image/tiff",
+      tiff: "image/tiff",
+      bmp: "image/bmp",
+      ico: "image/x-icon",
+      psd: "image/vnd.adobe.photoshop",
+      pdf: "application/pdf",
+      doc: "application/msword",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xls: "application/vnd.ms-excel",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ppt: "application/vnd.ms-powerpoint",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      rtf: "application/rtf",
+      txt: "text/plain",
+      md: "text/markdown",
+      markdown: "text/markdown",
+      csv: "text/csv",
+      json: "application/json",
+      zip: "application/zip",
+      ai: "application/postscript",
+      eps: "application/postscript",
+      ttf: "font/ttf",
+      otf: "font/otf",
+      woff: "font/woff",
+      woff2: "font/woff2",
+      mp3: "audio/mpeg",
+      wav: "audio/wav",
+      m4a: "audio/mp4",
+      aac: "audio/aac",
+      ogg: "audio/ogg",
+      flac: "audio/flac",
+      mp4: "video/mp4",
+      m4v: "video/x-m4v",
+      mov: "video/quicktime",
+      webm: "video/webm",
+      avi: "video/x-msvideo",
+      mkv: "video/x-matroska"
+    };
+    EXTENSION_FOR = {
+      "image/jpeg": "jpg",
+      "text/plain": "txt",
+      "text/markdown": "md",
+      "image/svg+xml": "svg",
+      "image/tiff": "tiff",
+      "application/postscript": "eps"
+    };
+    GLOB_CHARS = /[*?[]/;
+  }
+});
+
+// src/http.ts
+import { createRequire } from "node:module";
+import { Readable } from "node:stream";
+function transport(protocol) {
+  const secure = protocol === "https:";
+  const mod = secure ? nodeRequire("node:https") : nodeRequire("node:http");
+  let agent = agents.get(protocol);
+  if (!agent) {
+    agent = new mod.Agent({ keepAlive: true, maxSockets: 8 });
+    agents.set(protocol, agent);
+  }
+  return { request: mod.request, agent };
+}
+function wrap(res) {
+  const status = res.statusCode ?? 0;
+  let consumed;
+  const collect = () => {
+    consumed ??= (async () => {
+      const chunks = [];
+      for await (const chunk of res) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    })();
+    return consumed;
+  };
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: {
+      get(name) {
+        const value = res.headers[name.toLowerCase()];
+        if (value === void 0) return null;
+        return Array.isArray(value) ? value.join(", ") : String(value);
+      }
+    },
+    body: res,
+    text: async () => (await collect()).toString("utf8"),
+    arrayBuffer: async () => {
+      const bytes = await collect();
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    }
+  };
+}
+async function requestOnce(input, init) {
+  const url = new URL(input);
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new TypeError(`Unsupported protocol ${url.protocol}`);
+  const { request, agent } = transport(url.protocol);
+  return new Promise((resolve4, reject) => {
+    const req = request(url, { method: init.method ?? "GET", headers: init.headers, agent, signal: init.signal }, (res) => resolve4(wrap(res)));
+    req.setTimeout(IDLE_TIMEOUT_MS, () => req.destroy(Object.assign(new Error(`no response for ${IDLE_TIMEOUT_MS / 1e3}s`), { code: "ETIMEDOUT" })));
+    req.on("error", reject);
+    const body = init.body;
+    if (body === void 0 || body === null) req.end();
+    else if (typeof body === "string" || body instanceof Uint8Array) req.end(body);
+    else {
+      const source = body instanceof Readable ? body : Readable.from(body);
+      source.on("error", (error) => req.destroy(error));
+      source.pipe(req);
+    }
+  });
+}
+async function discard(response) {
+  try {
+    await response.text();
+  } catch {
+  }
+}
+function networkReason(error) {
+  if (!(error instanceof Error)) return String(error);
+  const inner = error.cause instanceof Error ? error.cause : error;
+  const code2 = inner.code;
+  return code2 && !inner.message.includes(code2) ? `${code2}: ${inner.message}` : inner.message;
+}
+var nodeRequire, IDLE_TIMEOUT_MS, agents, MAX_REDIRECTS, nodeFetch;
+var init_http = __esm({
+  "src/http.ts"() {
+    "use strict";
+    nodeRequire = createRequire(import.meta.url);
+    IDLE_TIMEOUT_MS = 6e4;
+    agents = /* @__PURE__ */ new Map();
+    MAX_REDIRECTS = 5;
+    nodeFetch = async (input, init = {}) => {
+      let url = input;
+      let current = init;
+      for (let hop = 0; ; hop++) {
+        const response = await requestOnce(url, current);
+        const location = response.headers.get("location");
+        const method = (current.method ?? "GET").toUpperCase();
+        if (current.redirect === "manual" || !location || response.status < 300 || response.status >= 400 || response.status === 304) return response;
+        if (hop >= MAX_REDIRECTS || method !== "GET" && method !== "HEAD") return response;
+        await discard(response);
+        const next = new URL(location, url);
+        const headers = { ...current.headers };
+        if (next.origin !== new URL(url).origin) {
+          for (const name of Object.keys(headers)) if (name.toLowerCase() === "authorization") delete headers[name];
+        }
+        url = next.toString();
+        current = { ...current, headers };
+      }
+    };
+  }
+});
+
+// src/pool.ts
+async function eachLimit(items, limit, worker, stop = () => false) {
+  let next = 0;
+  const lanes = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length && !stop()) {
+      const index = next++;
+      await worker(items[index], index);
+    }
+  });
+  await Promise.all(lanes);
+  return next;
+}
+var CONCURRENCY;
+var init_pool = __esm({
+  "src/pool.ts"() {
+    "use strict";
+    CONCURRENCY = 4;
+  }
+});
+
+// src/commands/buckets.ts
+var buckets_exports = {};
+__export(buckets_exports, {
+  commands: () => commands,
+  listAllBuckets: () => listAllBuckets,
+  looksLikeId: () => looksLikeId,
+  matchBucket: () => matchBucket,
+  resolveBucket: () => resolveBucket
+});
+function looksLikeId(value) {
+  return /^[0-9a-z]{31,32}$/.test(value);
+}
+function cachedBuckets(api) {
+  let pending2 = bucketLists.get(api);
+  if (!pending2) {
+    pending2 = listAllBuckets(api);
+    bucketLists.set(api, pending2);
+    pending2.catch(() => bucketLists.delete(api));
+  }
+  return pending2;
+}
+async function listAllBuckets(api, maxPages = 25) {
+  const all = [];
+  let cursor;
+  for (let page = 0; page < maxPages; page++) {
+    const result = await api.get("/v1/buckets", { limit: 200, cursor });
+    all.push(...result.buckets);
+    if (!result.nextCursor) break;
+    cursor = result.nextCursor;
+  }
+  return all;
+}
+function matchBucket(buckets2, ref) {
+  const byId = buckets2.find((bucket) => bucket.id === ref);
+  if (byId) return byId;
+  const needle = ref.trim().toLowerCase();
+  const exact = buckets2.filter((bucket) => bucket.name.toLowerCase() === needle || bucket.slug?.toLowerCase() === needle);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) return { ambiguous: exact };
+  const partial = buckets2.filter((bucket) => bucket.name.toLowerCase().includes(needle));
+  if (partial.length === 1) return partial[0];
+  if (partial.length > 1) return { ambiguous: partial };
+  return void 0;
+}
+async function resolveBucket(api, ref, opts = {}) {
+  if (looksLikeId(ref)) return { id: ref };
+  const match = matchBucket(await cachedBuckets(api), ref);
+  if (!match) {
+    throw new CliError(`No bucket called \u201C${ref}\u201D. List them with \`homebase buckets\`; create one only if the user asked (\`homebase bucket create "${ref}"\`).`, {
+      exitCode: EXIT.notFound,
+      code: "bucket_not_found"
+    });
+  }
+  if ("ambiguous" in match) {
+    throw usageError(
+      `\u201C${ref}\u201D matches ${match.ambiguous.length} buckets: ${match.ambiguous.slice(0, 8).map((bucket) => `${bucket.name} (${bucket.id})`).join(", ")}. Use the exact name or the id.`
+    );
+  }
+  const needle = ref.trim().toLowerCase();
+  if (opts.write && match.name.toLowerCase() !== needle && match.slug?.toLowerCase() !== needle) {
+    throw usageError(`\u201C${ref}\u201D only partly matches \u201C${match.name}\u201D. Changing a bucket needs its exact name or id; did you mean \u201C${match.name}\u201D (${match.id})?`);
+  }
+  return { id: match.id, name: match.name };
+}
+function bucketMembership(action) {
+  return async (ctx, parsed) => {
+    const [ref, ...ids] = parsed.positionals;
+    if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
+    const bucket = await resolveBucket(ctx.api, ref, { write: true });
+    const result = await ctx.api.post(`/v1/buckets/${encodeURIComponent(bucket.id)}/assets`, {
+      [action]: ids
+    });
+    return {
+      bucket: { id: bucket.id, name: bucket.name },
+      ...action === "add" ? { added: result.added } : { removed: result.removed },
+      notFound: result.notFound ?? []
+    };
+  };
+}
+var bucketLists, buckets, bucketCreate, bucketLs, SHARE_NOTE, shareLink, commands;
+var init_buckets = __esm({
+  "src/commands/buckets.ts"() {
+    "use strict";
+    init_args();
+    init_errors();
+    init_output();
+    bucketLists = /* @__PURE__ */ new WeakMap();
+    buckets = async (ctx, parsed) => {
+      let list;
+      let nextCursor = null;
+      if (parsed.values.all) {
+        list = await listAllBuckets(ctx.api);
+      } else {
+        const page = await ctx.api.get("/v1/buckets", {
+          limit: intOption(parsed.values.limit, "limit", 1, 200),
+          cursor: stringOption(parsed.values.cursor)
+        });
+        list = page.buckets;
+        nextCursor = page.nextCursor;
+      }
+      return { buckets: list.map((bucket) => bucketJson(bucket, ctx.view)), ...nextCursor ? { nextCursor } : {} };
+    };
+    bucketCreate = async (ctx, parsed) => {
+      const name = parsed.positionals.join(" ").trim();
+      if (!name) throw usageError("The bucket needs a name.");
+      const bucket = await ctx.api.post("/v1/buckets", { name, description: stringOption(parsed.values.description) });
+      return { ...bucketJson(bucket, ctx.view), ...bucket.shareUrl ? { shareUrl: bucket.shareUrl } : {} };
+    };
+    bucketLs = async (ctx, parsed) => {
+      const bucket = await resolveBucket(ctx.api, parsed.positionals.join(" "));
+      const path = `/v1/buckets/${encodeURIComponent(bucket.id)}/assets`;
+      const items = [];
+      let cursor = stringOption(parsed.values.cursor);
+      let nextCursor = null;
+      let name = bucket.name;
+      try {
+        for (let page = 0; page < (parsed.values.all ? 50 : 1); page++) {
+          const body = await ctx.api.get(path, {
+            limit: intOption(parsed.values.limit, "limit", 1, 200),
+            cursor
+          });
+          name ??= body.bucket?.name;
+          items.push(...body.assets ?? body.items ?? []);
+          nextCursor = body.nextCursor ?? null;
+          if (!nextCursor) break;
+          cursor = nextCursor;
+        }
+      } catch (error) {
+        if (isMissingRoute(error)) {
+          throw unsupportedError("listing a bucket's contents", `Search inside it instead: homebase search "${name ?? "files"}" --bucket ${bucket.id} --ignore date`);
+        }
+        throw error;
+      }
+      const assets = items.map((item) => {
+        if (ctx.view.full) return isoDates({ ...item });
+        const entry = listItemJson(item, ctx.view);
+        delete entry.buckets;
+        return { ...entry, ...item.addedAt !== void 0 ? { addedAt: isoFromMs(item.addedAt) } : {} };
+      });
+      return { bucket: { id: bucket.id, name }, assets, ...nextCursor ? { nextCursor } : {} };
+    };
+    SHARE_NOTE = "Give this link to the user to send; never send it yourself.";
+    shareLink = async (ctx, parsed) => {
+      const ref = parsed.positionals.join(" ");
+      const bucket = await resolveBucket(ctx.api, ref);
+      let link2;
+      try {
+        link2 = await ctx.api.get(`/v1/buckets/${encodeURIComponent(bucket.id)}/share-link`);
+      } catch (error) {
+        if (!isMissingRoute(error)) throw error;
+        const found = (await listAllBuckets(ctx.api)).find((entry) => entry.id === bucket.id);
+        if (!found?.shareUrl) throw unsupportedError("share links", "Copy the link from the bucket's Share button in the web app.");
+        link2 = { url: found.shareUrl, name: found.name };
+      }
+      const url = link2.url ?? link2.shareUrl;
+      if (!url) throw new CliError(`\u201C${bucket.name ?? ref}\u201D has no share link. Turn sharing on from the bucket's Share button in the web app.`, { code: "no_share_link", exitCode: EXIT.notFound });
+      return {
+        bucket: { id: bucket.id, name: bucket.name ?? link2.name },
+        url,
+        ...link2.itemCount !== void 0 ? { itemCount: link2.itemCount } : {},
+        ...link2.clientOpened !== void 0 ? { clientOpened: link2.clientOpened } : {},
+        note: SHARE_NOTE
+      };
+    };
+    commands = {
+      buckets,
+      "bucket create": bucketCreate,
+      "bucket add": bucketMembership("add"),
+      "bucket remove": bucketMembership("remove"),
+      "bucket ls": bucketLs,
+      "share-link": shareLink
+    };
+  }
+});
+
+// src/commands/library.ts
+var library_exports = {};
+__export(library_exports, {
+  commands: () => commands2,
+  duplicateOf: () => duplicateOf
+});
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync as statSync2, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename as basename2, join as join2, relative, resolve as resolve2 } from "node:path";
+import { pipeline } from "node:stream/promises";
+async function searchFilters(ctx, parsed) {
+  const filters = {};
+  const top = {};
+  const type = stringOption(parsed.values.type);
+  if (type) {
+    if (!FILE_TYPES.includes(type)) throw usageError(`--type must be one of ${FILE_TYPES.join(", ")}.`);
+    filters.fileType = type;
+    top.type = type;
+  }
+  const source = stringOption(parsed.values.source);
+  if (source) {
+    if (source !== "human" && source !== "agent") throw usageError("--source must be human or agent.");
+    filters.source = source;
+    top.source = source;
+  }
+  const tag2 = stringOption(parsed.values.tag);
+  if (tag2) {
+    filters.tag = tag2;
+    top.tag = tag2;
+  }
+  const bucket = stringOption(parsed.values.bucket);
+  if (bucket) {
+    const id = bucket === "none" ? "none" : (await resolveBucket(ctx.api, bucket)).id;
+    filters.bucket = id;
+    top.bucketId = id;
+  }
+  const ignore = listOption(parsed.values.ignore);
+  if (ignore.length) filters.ignore = ignore;
+  return { ...top, ...Object.keys(filters).length ? { filters } : {} };
+}
+async function runSearch(ctx, parsed, query) {
+  const cursor = stringOption(parsed.values.cursor);
+  let response;
+  try {
+    response = await ctx.api.post("/v1/search", {
+      ...query || !cursor ? { query } : {},
+      ...cursor ? { cursor } : {},
+      limit: intOption(parsed.values.limit, "limit", 1, 50),
+      ...await searchFilters(ctx, parsed)
+    });
+  } catch (error) {
+    if (!query && !cursor && error instanceof CliError && error.code === "invalid_request" && /query/i.test(error.message)) {
+      throw unsupportedError("browsing recent assets (an empty search)", 'Search with words instead, e.g. homebase search "newest images".');
+    }
+    throw error;
+  }
+  return searchJson(response, ctx.view);
+}
+async function fetchToFile(ctx, url, path) {
+  const response = await ctx.fetch(url, { method: "GET" });
+  if (!response.ok || !response.body) {
+    await discard(response);
+    throw new CliError(`Couldn't fetch the file (HTTP ${response.status}).`, { code: `http_${response.status}`, status: response.status });
+  }
+  await pipeline(response.body, createWriteStream(path));
+  return { bytes: statSync2(path).size, contentType: response.headers.get("content-type") ?? void 0 };
+}
+async function viewTarget(ctx, ref) {
+  if (looksLikeId(ref)) return { id: ref };
+  const response = await ctx.api.post("/v1/search", { query: ref, limit: 5 });
+  const results = (response.groups ?? []).flatMap((group) => group.results ?? []);
+  if (!results.length) throw new CliError(`Nothing in the library matches \u201C${ref}\u201D. Try other words, or homebase search to browse.`, { code: "no_match", exitCode: EXIT.notFound });
+  return { id: results[0].id, search: { query: ref, alternatives: results.slice(1, 5).map((result) => ({ id: result.id, title: result.title, type: result.type })) } };
+}
+async function downloadOne(ctx, id, dir, force) {
+  const [asset, link2] = await Promise.all([ctx.api.get(assetPath(id)), ctx.api.get(`${assetPath(id)}/download-url`)]);
+  if (link2.kind === "link" && (asset.type === "link" || asset.type === "embed")) {
+    return { id, reason: "This asset is a link to a web page, not a file.", url: link2.url };
+  }
+  const part = join2(dir, `.${id}.homebase-part`);
+  const partTag = `${part}.etag`;
+  let offset = 0;
+  let etag;
+  try {
+    offset = statSync2(part).size;
+    etag = readFileSync(partTag, "utf8").trim() || void 0;
+  } catch {
+    etag = void 0;
+  }
+  if (!etag) offset = 0;
+  let response = await ctx.fetch(link2.url, { method: "GET", headers: offset ? { Range: `bytes=${offset}-`, "If-Range": etag } : {} });
+  if (response.status === 416 || response.status === 206 && offset > 0 && response.headers.get("etag") !== null && response.headers.get("etag") !== etag) {
+    await discard(response);
+    rmSync(part, { force: true });
+    rmSync(partTag, { force: true });
+    offset = 0;
+    response = await ctx.fetch(link2.url, { method: "GET" });
+  }
+  if (!response.ok || !response.body) {
+    await discard(response);
+    throw new CliError(`Downloading \u201C${asset.title}\u201D failed (HTTP ${response.status}). The link may have expired; retry.`, { code: `http_${response.status}`, status: response.status });
+  }
+  const name = downloadFilename({ title: asset.title, mimeType: asset.mimeType, contentDisposition: response.headers.get("content-disposition"), url: link2.url });
+  let target = join2(dir, name);
+  if (!force) target = uniquePath(target, (candidate) => existsSync(candidate));
+  const resumed = response.status === 206 && offset > 0;
+  if (!resumed) {
+    const fresh = response.headers.get("etag");
+    if (fresh) writeFileSync(partTag, fresh);
+    else rmSync(partTag, { force: true });
+  }
+  await pipeline(response.body, createWriteStream(part, { flags: resumed ? "a" : "w" }));
+  const bytes = statSync2(part).size;
+  renameSync(part, target);
+  rmSync(partTag, { force: true });
+  return { id, title: asset.title, path: target, bytes, resumed };
+}
+async function putFile(ctx, grant, path, size) {
+  const response = await ctx.fetch(grant.uploadUrl, {
+    method: "PUT",
+    headers: { ...grant.headers, "Content-Length": String(size) },
+    body: createReadStream(path),
+    duplex: "half"
+  });
+  const text = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new CliError(`Uploading the bytes of ${basename2(path)} failed (HTTP ${response.status}). ${text.slice(0, 200)}`.trim(), {
+      code: `upload_put_${response.status}`,
+      status: response.status
+    });
+  }
+}
+function duplicateOf(value) {
+  const raw = value instanceof CliError ? value.server?.duplicate_of : value && typeof value === "object" ? value.duplicate_of : void 0;
+  if (!raw) return void 0;
+  if (typeof raw === "string") return { id: raw };
+  if (typeof raw === "object" && typeof raw.id === "string") {
+    const ref = raw;
+    return { id: ref.id, title: ref.title, type: ref.type, buckets: bucketNames(ref.buckets) };
+  }
+  return void 0;
+}
+async function describeDuplicate(ctx, ref) {
+  if (ref.title) return ref;
+  try {
+    const asset = await ctx.api.get(assetPath(ref.id));
+    return { id: ref.id, title: asset.title, type: asset.type, buckets: bucketNames(asset.buckets) };
+  } catch {
+    return ref;
+  }
+}
+function duplicateHint(ref, opts) {
+  const reuse = [];
+  if (opts.tags.length) reuse.push(`homebase tag ${ref.id} --add ${shellQuote(opts.tags.join(","))}`);
+  for (const bucket of opts.buckets.filter((wanted) => !ref.buckets?.includes(wanted.name ?? ""))) reuse.push(`homebase bucket add ${shellQuote(bucket.name ?? bucket.id)} ${ref.id}`);
+  return [reuse.length ? `Already in the library. To reuse it: ${reuse.join(" && ")}.` : "Already in the library.", `A second copy only if the user asks: ${opts.retry} --allow-duplicate.`].join(" ");
+}
+async function bucketTargets(ctx, value) {
+  const refs = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  return Promise.all(refs.map((ref) => resolveBucket(ctx.api, ref, { write: true })));
+}
+function isMissingImportRoute(error) {
+  return error instanceof CliError && error.code === "not_found" && /There is no POST \/v1\/assets\/import/.test(error.message);
+}
+var FILE_TYPES, assetPath, stopsBatch, search, recent, get, versions, view, link, download, upload, importUrl, tag, rename, commands2;
+var init_library = __esm({
+  "src/commands/library.ts"() {
+    "use strict";
+    init_args();
+    init_errors();
+    init_files();
+    init_http();
+    init_output();
+    init_pool();
+    init_buckets();
+    FILE_TYPES = ["image", "document", "video", "link", "embed", "other"];
+    assetPath = (id) => `/v1/assets/${encodeURIComponent(id)}`;
+    stopsBatch = (error) => error.exitCode === EXIT.auth || error.exitCode === EXIT.limit;
+    search = (ctx, parsed) => runSearch(ctx, parsed, parsed.positionals.join(" ").trim());
+    recent = (ctx, parsed) => runSearch(ctx, parsed, "");
+    get = async (ctx, parsed) => assetJson(await ctx.api.get(assetPath(parsed.positionals[0])), ctx.view);
+    versions = async (ctx, parsed) => {
+      const id = parsed.positionals[0];
+      let body;
+      try {
+        body = await ctx.api.get(`${assetPath(id)}/versions`);
+      } catch (error) {
+        if (isMissingRoute(error)) throw unsupportedError("version history", `\`homebase get ${id}\` shows the current version and versionsCount.`);
+        throw error;
+      }
+      return {
+        id: body.id ?? id,
+        title: body.title,
+        currentVersion: body.currentVersion,
+        versions: (body.versions ?? []).map((version) => isoDates(version))
+      };
+    };
+    view = async (ctx, parsed) => {
+      const target = await viewTarget(ctx, parsed.positionals.join(" ").trim());
+      const id = target.id;
+      const asset = await ctx.api.get(assetPath(id));
+      let url = parsed.values.original ? void 0 : asset.thumbnailUrl;
+      let kind = "preview";
+      if (!url && asset.type === "image" && (asset.size ?? 0) <= 20 * 1024 * 1024) {
+        url = (await ctx.api.get(`${assetPath(id)}/download-url`)).url;
+        kind = "original";
+      }
+      if (!url) {
+        throw new CliError(
+          asset.indexing?.status === "pending" || asset.indexing?.status === "running" || asset.indexing?.status === "queued" ? "The preview is still being drawn. Retry in a few seconds." : `\u201C${asset.title}\u201D (${asset.type}) has no preview image. Read its description with \`homebase get ${id}\`, or download it with \`homebase download ${id}\`.`,
+          { code: "no_preview", exitCode: EXIT.notFound }
+        );
+      }
+      const ext = kind === "preview" ? "jpg" : downloadFilename({ title: "x", mimeType: asset.mimeType }).split(".").pop() ?? "img";
+      const path = resolve2(ctx.cwd, stringOption(parsed.values.output) ?? join2(tmpdir(), "homebase-view", `${id}-${kind}.${ext}`));
+      mkdirSync(resolve2(path, ".."), { recursive: true });
+      const saved = await fetchToFile(ctx, url, path);
+      return { id, title: asset.title, path, kind, bytes: saved.bytes, contentType: saved.contentType, ...target.search ? { search: target.search } : {} };
+    };
+    link = async (ctx, parsed) => {
+      const result = await ctx.api.get(`${assetPath(parsed.positionals[0])}/download-url`);
+      return { id: result.id, url: result.url, kind: result.kind, ...result.expiresAt ? { expiresAt: result.expiresAt } : {} };
+    };
+    download = async (ctx, parsed) => {
+      const dir = resolve2(ctx.cwd, stringOption(parsed.values.output) ?? ".");
+      mkdirSync(dir, { recursive: true });
+      const ids = [...new Set(parsed.positionals)];
+      const outcomes = [];
+      let firstError;
+      let stop = false;
+      await eachLimit(
+        ids,
+        CONCURRENCY,
+        async (id, index) => {
+          try {
+            outcomes[index] = await downloadOne(ctx, id, dir, Boolean(parsed.values.force));
+          } catch (error) {
+            if (!(error instanceof CliError)) throw error;
+            firstError ??= error;
+            outcomes[index] = { id, error: { code: error.code, message: error.message } };
+            if (stopsBatch(error)) stop = true;
+          }
+        },
+        () => stop
+      );
+      const done2 = outcomes.filter(Boolean);
+      const data = {
+        downloaded: done2.filter((entry) => "path" in entry),
+        skipped: done2.filter((entry) => "reason" in entry),
+        failed: done2.filter((entry) => "error" in entry)
+      };
+      if (firstError) throw withData(firstError, data);
+      return data;
+    };
+    upload = async (ctx, parsed) => {
+      const files = expandUploadArgs(parsed.positionals, { recursive: Boolean(parsed.values.recursive), cwd: ctx.cwd });
+      const title = stringOption(parsed.values.title);
+      if (title && files.length > 1) throw usageError("--title works with one file only.");
+      if (files.length > 500) throw usageError(`That's ${files.length} files; upload at most 500 per run.`);
+      for (const file of files) if (statSync2(file).size === 0) throw usageError(`${relative(ctx.cwd, file) || basename2(file)} is empty; nothing was uploaded.`);
+      const tags = listOption(parsed.values.tag);
+      const allowDuplicate = Boolean(parsed.values["allow-duplicate"]);
+      const bucketsReady = bucketTargets(ctx, parsed.values.bucket);
+      bucketsReady.catch(() => {
+      });
+      const shown = (file) => relative(ctx.cwd, file) || basename2(file);
+      const outcomes = [];
+      let bucketError;
+      let stopError;
+      let firstError;
+      const noteDuplicate = async (index, file, found, buckets2) => {
+        const ref = await describeDuplicate(ctx, found);
+        outcomes[index] = { kind: "duplicate", file: shown(file), duplicate_of: ref, hint: duplicateHint(ref, { tags, buckets: buckets2, retry: `homebase upload ${shellQuote(shown(file))}` }) };
+      };
+      const started = await eachLimit(
+        files,
+        CONCURRENCY,
+        async (file, index) => {
+          const size = statSync2(file).size;
+          const mimeType = mimeFor(file);
+          let buckets2 = [];
+          try {
+            const grant = await ctx.api.post("/v1/uploads", {
+              filename: basename2(file),
+              contentType: mimeType,
+              size,
+              ...allowDuplicate ? { allowDuplicate: true } : {}
+            });
+            try {
+              buckets2 = await bucketsReady;
+            } catch (error) {
+              bucketError = error;
+              return;
+            }
+            const early = duplicateOf(grant);
+            if (early && !grant.uploadUrl) return noteDuplicate(index, file, early, buckets2);
+            await putFile(ctx, grant, file, size);
+            const asset = await ctx.api.post("/v1/assets", {
+              key: grant.key,
+              mimeType: grant.headers["Content-Type"] ?? mimeType,
+              size,
+              ...title ? { title } : {},
+              ...tags.length ? { tags } : {},
+              ...buckets2.length ? { bucketIds: buckets2.map((bucket) => bucket.id) } : {},
+              ...allowDuplicate ? { allowDuplicate: true } : {}
+            });
+            const duplicate = duplicateOf(asset);
+            if (duplicate) return noteDuplicate(index, file, duplicate, buckets2);
+            outcomes[index] = { kind: "uploaded", file: shown(file), ...createdJson(asset) };
+          } catch (error) {
+            if (!(error instanceof CliError)) throw error;
+            const duplicate = duplicateOf(error);
+            if (duplicate) return noteDuplicate(index, file, duplicate, buckets2);
+            firstError ??= error;
+            outcomes[index] = { kind: "failed", file: shown(file), error: { code: error.code, message: error.message } };
+            if (stopsBatch(error)) stopError ??= error;
+          }
+        },
+        () => Boolean(stopError || bucketError)
+      );
+      bucketError ??= await bucketsReady.then(
+        () => void 0,
+        (error) => error
+      );
+      if (bucketError) throw bucketError;
+      const pick = (kind) => outcomes.filter((outcome) => outcome?.kind === kind).map((outcome) => {
+        const rest = { ...outcome };
+        delete rest.kind;
+        return rest;
+      });
+      const data = {
+        uploaded: pick("uploaded"),
+        duplicates: pick("duplicate"),
+        failed: pick("failed"),
+        notTried: files.slice(started).map(shown)
+      };
+      const reported = stopError ?? firstError;
+      if (reported) throw withData(reported, data);
+      return data;
+    };
+    importUrl = async (ctx, parsed) => {
+      const url = parsed.positionals[0];
+      if (!/^https?:\/\//i.test(url)) throw usageError("Give a full http(s) URL.");
+      const tags = listOption(parsed.values.tag);
+      const buckets2 = await bucketTargets(ctx, parsed.values.bucket);
+      const title = stringOption(parsed.values.title);
+      const body = {
+        url,
+        ...title ? { title } : {},
+        ...tags.length ? { tags } : {},
+        ...buckets2.length ? { bucketIds: buckets2.map((bucket) => bucket.id) } : {},
+        ...parsed.values["allow-duplicate"] ? { allowDuplicate: true } : {}
+      };
+      let asset;
+      try {
+        if (parsed.values.link) asset = await ctx.api.post("/v1/assets", body);
+        else {
+          try {
+            asset = await ctx.api.post("/v1/assets/import", body);
+          } catch (error) {
+            if (isMissingImportRoute(error)) asset = await ctx.api.post("/v1/assets", body);
+            else if (error instanceof CliError && error.code === "invalid_request" && /answered HTTP/.test(error.message)) {
+              throw new CliError(error.message, { exitCode: error.exitCode, code: error.code, status: error.status, server: error.server, hint: `To save the page as a link instead: homebase import ${url} --link` });
+            } else throw error;
+          }
+        }
+      } catch (error) {
+        const duplicate = duplicateOf(error);
+        if (!duplicate) throw error;
+        asset = { duplicate_of: duplicate };
+      }
+      const found = duplicateOf(asset);
+      if (found) {
+        const duplicate = await describeDuplicate(ctx, found);
+        return { imported: false, duplicate_of: duplicate, hint: duplicateHint(duplicate, { tags, buckets: buckets2, retry: `homebase import ${shellQuote(url)}` }) };
+      }
+      return { imported: true, importedAs: asset.type === "link" || asset.type === "embed" ? "link" : "file", ...createdJson(asset) };
+    };
+    tag = async (ctx, parsed) => {
+      const add = listOption(parsed.values.add);
+      const remove = listOption(parsed.values.remove);
+      if (!add.length && !remove.length) throw usageError("Say what to change: --add <tag> and/or --remove <tag>.");
+      const ids = [...new Set(parsed.positionals)];
+      if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
+      const results = [];
+      const failed = [];
+      let firstError;
+      await eachLimit(
+        ids,
+        CONCURRENCY,
+        async (id, index) => {
+          try {
+            const result = await ctx.api.post(`${assetPath(id)}/tags`, { ...add.length ? { add } : {}, ...remove.length ? { remove } : {} });
+            results[index] = { id: result.id, tags: result.tags, added: result.added, removed: result.removed };
+          } catch (error) {
+            if (!(error instanceof CliError)) throw error;
+            firstError ??= error;
+            failed.push({ id, error: { code: error.code, message: error.message } });
+          }
+        },
+        () => Boolean(firstError && stopsBatch(firstError))
+      );
+      const data = { results: results.filter(Boolean), ...failed.length ? { failed } : {} };
+      if (firstError) throw withData(firstError, data);
+      return data;
+    };
+    rename = async (ctx, parsed) => {
+      const [id, ...words] = parsed.positionals;
+      const title = words.join(" ").trim();
+      if (!title) throw usageError("Give the new title.");
+      const result = await ctx.api.patch(assetPath(id), { title });
+      return { id: result.id, title: result.title };
+    };
+    commands2 = { search, recent, get, versions, view, link, download, upload, import: importUrl, tag, rename };
+  }
+});
+
+// src/capabilities.ts
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join3 } from "node:path";
+function openApi(ctx) {
+  return ctx.api.request("GET", "/v1/openapi.json", { auth: false }).catch(() => void 0);
+}
+function operationText(spec, path, method) {
+  const op = spec.paths?.[path]?.[method];
+  if (!op) return void 0;
+  const schemas = spec.components?.schemas ?? {};
+  const seen = /* @__PURE__ */ new Set();
+  const parts = [];
+  const visit = (value) => {
+    const text = JSON.stringify(value) ?? "";
+    parts.push(text);
+    for (const [, name] of text.matchAll(/"#\/components\/schemas\/([^"]+)"/g)) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      visit(schemas[name]);
+    }
+  };
+  visit(op);
+  return parts.join("\n");
+}
+function cachePath(ctx) {
+  return join3(ctx.store.dir, "capabilities.json");
+}
+function readCache(ctx) {
+  try {
+    const data = JSON.parse(readFileSync2(cachePath(ctx), "utf8"));
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+async function hasDeletePreview(ctx, now = Date.now()) {
+  const origin2 = new URL(ctx.apiUrl).origin;
+  const cache = readCache(ctx);
+  const hit = cache[origin2];
+  if (hit?.deletePreview && now - hit.checkedAt < TTL_MS) return true;
+  const spec = await openApi(ctx);
+  const yes = Boolean(spec && /confirm_token/.test(operationText(spec, "/v1/assets/delete", "post") ?? ""));
+  if (yes) {
+    try {
+      mkdirSync2(ctx.store.dir, { recursive: true, mode: 448 });
+      writeFileSync2(cachePath(ctx), JSON.stringify({ ...cache, [origin2]: { deletePreview: true, checkedAt: now } }), { mode: 384 });
+    } catch {
+    }
+  }
+  return yes;
+}
+var TTL_MS;
+var init_capabilities = __esm({
+  "src/capabilities.ts"() {
+    "use strict";
+    TTL_MS = 24 * 60 * 60 * 1e3;
+  }
+});
+
+// src/commands/trash.ts
+var trash_exports = {};
+__export(trash_exports, {
+  commands: () => commands3
+});
+import { randomBytes } from "node:crypto";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join4 } from "node:path";
+function pendingPath(ctx) {
+  return join4(ctx.store.dir, "pending-delete.json");
+}
+function readLocal(ctx) {
+  try {
+    const data = JSON.parse(readFileSync3(pendingPath(ctx), "utf8"));
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+function writeLocal(ctx, data) {
+  mkdirSync3(ctx.store.dir, { recursive: true, mode: 448 });
+  const now = Date.now();
+  const fresh = Object.fromEntries(Object.entries(data).filter(([, entry]) => entry.expiresAt > now));
+  writeFileSync3(pendingPath(ctx), JSON.stringify(fresh, null, 2), { mode: 384 });
+}
+function normalizePreview(body, source) {
+  const assets = (body.assets ?? []).map((asset) => ({
+    id: asset.id,
+    title: asset.title,
+    type: asset.type,
+    buckets: (asset.buckets ?? []).map((bucket) => ({ ...bucket }))
+  }));
+  return {
+    preview: true,
+    assets,
+    notFound: body.notFound ?? [],
+    confirm_token: String(body.confirm_token ?? ""),
+    expires_in: Number(body.expires_in ?? LOCAL_TTL_S),
+    source
+  };
+}
+async function localPreview(ctx, ids) {
+  const assets = [];
+  const notFound = [];
+  for (const id of ids) {
+    try {
+      const asset = await ctx.api.get(`/v1/assets/${encodeURIComponent(id)}`);
+      assets.push({
+        id: asset.id,
+        title: asset.title,
+        type: asset.type,
+        // This server doesn't say whether a client link is live; a share page exists for every bucket that has a shareUrl.
+        buckets: (asset.buckets ?? []).map((bucket) => ({ id: bucket.id, name: bucket.name, shareUrl: bucket.shareUrl }))
+      });
+    } catch (error) {
+      if (error instanceof CliError && error.exitCode === EXIT.notFound) notFound.push(id);
+      else throw error;
+    }
+  }
+  const token = `local_${randomBytes(12).toString("hex")}`;
+  if (assets.length) writeLocal(ctx, { ...readLocal(ctx), [token]: { ids: assets.map((asset) => asset.id), api: ctx.apiUrl, expiresAt: Date.now() + LOCAL_TTL_S * 1e3 } });
+  return { preview: true, assets, notFound, confirm_token: assets.length ? token : "", expires_in: LOCAL_TTL_S, source: "local" };
+}
+async function confirmDelete(ctx, ids, token, source) {
+  if (source === "local") {
+    const pending2 = readLocal(ctx);
+    const entry = pending2[token];
+    if (!entry || entry.expiresAt < Date.now() || entry.api !== ctx.apiUrl) {
+      throw new CliError("That confirm token is unknown or expired. Run `homebase delete <ids\u2026>` again to preview, and show the user the list.", { exitCode: EXIT.confirm, code: "confirm_token_invalid" });
+    }
+    if (!sameIds(entry.ids, ids)) {
+      throw new CliError("The ids don't match the preview this token was issued for. Preview exactly the assets the user approved.", { exitCode: EXIT.confirm, code: "confirm_token_mismatch" });
+    }
+    delete pending2[token];
+    writeLocal(ctx, pending2);
+    const body2 = await ctx.api.post("/v1/assets/delete", { ids });
+    if (body2.preview === true) return normalizePreview(body2, "server");
+    return body2;
+  }
+  let body;
+  try {
+    body = await ctx.api.post("/v1/assets/delete", { ids, confirm_token: token });
+  } catch (error) {
+    if (error instanceof CliError && error.exitCode !== EXIT.auth && error.exitCode !== EXIT.limit && /confirm/i.test(`${error.code} ${error.message}`)) {
+      const said = /nothing was deleted/i.test(error.message);
+      throw new CliError(`${error.message}${said ? "" : " Nothing was deleted. Run the preview again and show the user the list before confirming."}`, {
+        exitCode: EXIT.confirm,
+        code: "confirm_token_invalid",
+        status: error.status
+      });
+    }
+    throw error;
+  }
+  if (body.preview === true) return normalizePreview(body, "server");
+  return body;
+}
+function deletedJson(result) {
+  return { deleted: result.deleted ?? [], notFound: result.notFound ?? [], restorable: RESTORABLE };
+}
+function previewAssets(preview) {
+  return preview.assets.map((asset) => ({
+    id: asset.id,
+    title: asset.title,
+    type: asset.type,
+    buckets: asset.buckets.map((bucket) => ({
+      name: bucket.name,
+      ...bucket.clientLinkLive !== void 0 ? { clientLinkLive: bucket.clientLinkLive } : {},
+      ...bucket.clientOpened ? { clientOpened: true } : {},
+      ...bucket.clientLinkLive === void 0 && bucket.shareUrl ? { hasSharePage: true } : {}
+    }))
+  }));
+}
+function needsConfirmation(ids, preview) {
+  const rerun = `homebase delete ${ids.join(" ")} --confirm-token ${preview.confirm_token}`;
+  const live = preview.assets.filter((asset) => asset.buckets.some((bucket) => bucket.clientLinkLive)).length;
+  const nextStep = "Show the user every title and its buckets" + (live ? `, and warn that ${live} ${live === 1 ? "is" : "are"} on a live client link the client will stop seeing` : "") + `. Ask whether to delete them and end your turn. Only after they say yes in a new message, run: ${rerun}. The token expires in ${Math.round(preview.expires_in / 60)} minutes.`;
+  throw new CliError(`Confirmation required. Nothing was deleted.`, {
+    exitCode: EXIT.confirm,
+    code: "confirmation_required",
+    data: {
+      confirmation_required: true,
+      assets: previewAssets(preview),
+      notFound: preview.notFound,
+      confirm_token: preview.confirm_token,
+      expires_in: preview.expires_in,
+      next_step: nextStep
+    }
+  });
+}
+var LOCAL_TTL_S, RESTORABLE, sameIds, isPreview, del, deleted, restore, commands3;
+var init_trash = __esm({
+  "src/commands/trash.ts"() {
+    "use strict";
+    init_args();
+    init_capabilities();
+    init_errors();
+    init_output();
+    init_buckets();
+    LOCAL_TTL_S = 600;
+    RESTORABLE = "30 days, by a workspace owner or admin: homebase restore <id>\u2026";
+    sameIds = (a, b) => [...a].sort().join(",") === [...b].sort().join(",");
+    isPreview = (result) => result.preview === true;
+    del = async (ctx, parsed) => {
+      const ids = [...new Set(parsed.positionals)];
+      if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
+      for (const id of ids) if (!looksLikeId(id)) throw usageError(`\u201C${id}\u201D isn't an asset id. Find ids with \`homebase search\`.`);
+      const token = stringOption(parsed.values["confirm-token"]);
+      if (token) {
+        const source = token.startsWith("local_") ? "local" : "server";
+        if (source === "server" && !await hasDeletePreview(ctx)) {
+          throw usageError("This server doesn't issue confirm tokens; that token isn't from `homebase delete`. Run the preview again.");
+        }
+        const result = await confirmDelete(ctx, ids, token, source);
+        if (isPreview(result)) return needsConfirmation(ids, result);
+        return deletedJson(result);
+      }
+      let preview;
+      if (await hasDeletePreview(ctx)) {
+        const body = await ctx.api.post("/v1/assets/delete", { ids });
+        if (body.preview !== true) return deletedJson(body);
+        preview = normalizePreview(body, "server");
+      } else {
+        preview = await localPreview(ctx, ids);
+      }
+      if (!preview.assets.length) return deletedJson({ deleted: [], notFound: preview.notFound });
+      return needsConfirmation(ids, preview);
+    };
+    deleted = async (ctx, parsed) => {
+      let page;
+      try {
+        page = await ctx.api.get("/v1/assets/deleted", { limit: intOption(parsed.values.limit, "limit", 1, 100), cursor: stringOption(parsed.values.cursor) });
+      } catch (error) {
+        if (isMissingRoute(error, /No asset with id deleted/)) throw unsupportedError("listing Recently deleted", "Owners and admins can see it in the web app: Library \u2192 Recently deleted.");
+        throw error;
+      }
+      const assets = (page.assets ?? page.items ?? []).map((asset) => ({
+        id: asset.id,
+        title: asset.title,
+        type: asset.type,
+        deletedAt: isoFromMs(asset.deletedAt),
+        purgeAt: isoFromMs(asset.purgeAt),
+        buckets: bucketNames(asset.buckets)
+      }));
+      return { assets, ...page.nextCursor ? { nextCursor: page.nextCursor } : {} };
+    };
+    restore = async (ctx, parsed) => {
+      const ids = [...new Set(parsed.positionals)];
+      if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
+      for (const id of ids) if (!looksLikeId(id)) throw usageError(`\u201C${id}\u201D isn't an asset id. List them with \`homebase deleted\`.`);
+      let result;
+      try {
+        result = await ctx.api.post("/v1/assets/restore", { ids });
+      } catch (error) {
+        if (isMissingRoute(error)) throw unsupportedError("restoring assets", "Owners and admins can restore them in the web app: Library \u2192 Recently deleted.");
+        throw error;
+      }
+      return { restored: result.restored ?? [], notFound: result.notFound ?? [] };
+    };
+    commands3 = { delete: del, deleted, restore };
+  }
+});
 
 // src/credentials.ts
 import { spawnSync } from "node:child_process";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync as existsSync2, mkdirSync as mkdirSync4, openSync, readFileSync as readFileSync4, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-var PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
+import { join as join5 } from "node:path";
 function validateProfileName(name) {
   if (!PROFILE_NAME.test(name)) {
     throw usageError(`Invalid profile name "${name}". Use 1-40 letters, digits, dots, dashes or underscores.`);
@@ -260,8 +1996,8 @@ function validateProfileName(name) {
 }
 function configDir(env = process.env) {
   if (env.HOMEBASE_CONFIG_DIR) return env.HOMEBASE_CONFIG_DIR;
-  if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, "homebase");
-  return join(homedir(), ".config", "homebase");
+  if (env.XDG_CONFIG_HOME) return join5(env.XDG_CONFIG_HOME, "homebase");
+  return join5(homedir(), ".config", "homebase");
 }
 function onPath(command) {
   const result = spawnSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" });
@@ -274,7 +2010,7 @@ function keychainService(env = process.env) {
 function macKeychain(service = keychainService()) {
   return {
     name: "macOS Keychain",
-    available: () => process.platform === "darwin" && existsSync("/usr/bin/security"),
+    available: () => process.platform === "darwin" && existsSync2("/usr/bin/security"),
     get(account) {
       const result = spawnSync("/usr/bin/security", ["find-generic-password", "-s", service, "-a", account, "-w"], { encoding: "utf8" });
       if (result.status !== 0) return null;
@@ -323,19 +2059,18 @@ function defaultKeychain(env = process.env) {
 }
 function writePrivate(path, value) {
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
+  writeFileSync4(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
   chmodSync(tmp, 384);
-  renameSync(tmp, path);
+  renameSync2(tmp, path);
 }
 function readJsonFile(path, fallback) {
-  if (!existsSync(path)) return fallback;
+  if (!existsSync2(path)) return fallback;
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readFileSync4(path, "utf8"));
   } catch {
     return fallback;
   }
 }
-var BLOB_PREFIX = "hbs1.";
 function encodeSession(session) {
   return BLOB_PREFIX + Buffer.from(JSON.stringify(session), "utf8").toString("base64url");
 }
@@ -358,208 +2093,218 @@ function asSession(value) {
 function canRefresh(session) {
   return Boolean(session.refresh_token && session.issuer && session.client_id);
 }
-var CredentialStore = class {
-  dir;
-  keychain;
-  constructor(opts = {}) {
-    this.dir = opts.dir ?? configDir(opts.env);
-    this.keychain = opts.keychain === void 0 ? defaultKeychain(opts.env) : opts.keychain;
-  }
-  get configPath() {
-    return join(this.dir, "config.json");
-  }
-  get credentialsPath() {
-    return join(this.dir, "credentials.json");
-  }
-  get pendingPath() {
-    return join(this.dir, "pending-login.json");
-  }
-  lockPath(profile) {
-    return join(this.dir, `refresh-${validateProfileName(profile)}.lock`);
-  }
-  ensureDir() {
-    mkdirSync(this.dir, { recursive: true, mode: 448 });
-  }
-  readConfig() {
-    const config = readJsonFile(this.configPath, { profiles: {} });
-    if (!config.profiles || typeof config.profiles !== "object") config.profiles = {};
-    return config;
-  }
-  writeConfig(config) {
-    this.ensureDir();
-    writePrivate(this.configPath, config);
-  }
-  readFileEntries() {
-    const file = readJsonFile(this.credentialsPath, {});
-    return file.profiles && typeof file.profiles === "object" ? { ...file.profiles } : {};
-  }
-  writeFileEntries(entries) {
-    this.ensureDir();
-    if (!Object.keys(entries).length) {
-      rmSync(this.credentialsPath, { force: true });
-      return;
-    }
-    writePrivate(this.credentialsPath, { profiles: entries });
-  }
-  /** Saves a login for a profile: keychain first, else the 0600 file. */
-  saveSession(profile, info, session) {
-    validateProfileName(profile);
-    const account = `profile:${profile}`;
-    let storage = "file";
-    if (this.keychain) {
-      try {
-        if (this.keychain.set(account, `Homebase CLI (${profile})`, encodeSession(session))) storage = "keychain";
-      } catch {
-        storage = "file";
+var PROFILE_NAME, BLOB_PREFIX, CredentialStore, LOCK_STALE_MS, LOCK_WAIT_MS;
+var init_credentials = __esm({
+  "src/credentials.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
+    BLOB_PREFIX = "hbs1.";
+    CredentialStore = class {
+      dir;
+      keychain;
+      constructor(opts = {}) {
+        this.dir = opts.dir ?? configDir(opts.env);
+        this.keychain = opts.keychain === void 0 ? defaultKeychain(opts.env) : opts.keychain;
       }
-    }
-    const entries = this.readFileEntries();
-    if (storage === "file") entries[profile] = { session };
-    else delete entries[profile];
-    this.writeFileEntries(entries);
-    const config = this.readConfig();
-    const saved = {
-      ...info,
-      api: session.api,
-      auth: canRefresh(session) ? "oauth" : "legacy",
-      storage,
-      savedAt: config.profiles[profile]?.savedAt && config.profiles[profile]?.tokenId === info.tokenId ? config.profiles[profile].savedAt : (/* @__PURE__ */ new Date()).toISOString()
-    };
-    config.profiles[profile] = saved;
-    if (!config.defaultProfile || !config.profiles[config.defaultProfile]) config.defaultProfile = profile;
-    this.writeConfig(config);
-    return saved;
-  }
-  /** Saves a bare token (a Settings key, or an older device login) bound to `api`. */
-  save(profile, info, token2) {
-    const { api, ...rest } = info;
-    return this.saveSession(profile, rest, { api, access_token: token2, scopes: info.scopes, workspace: info.workspace });
-  }
-  /** Replaces the tokens of an existing login (after a refresh), keeping where it is stored. */
-  updateSession(profile, session) {
-    const info = this.readConfig().profiles[profile];
-    if (!info) return;
-    if (info.storage === "keychain" && this.keychain) {
-      try {
-        if (this.keychain.set(`profile:${profile}`, `Homebase CLI (${profile})`, encodeSession(session))) return;
-      } catch {
+      get configPath() {
+        return join5(this.dir, "config.json");
       }
-    }
-    const entries = this.readFileEntries();
-    entries[profile] = { session };
-    this.writeFileEntries(entries);
-    if (info.storage !== "file") {
-      const config = this.readConfig();
-      if (config.profiles[profile]) config.profiles[profile].storage = "file";
-      this.writeConfig(config);
-    }
-  }
-  /** A profile's login, or null. Old stores (a bare token) read as a legacy session. */
-  session(profile) {
-    const info = this.readConfig().profiles[profile];
-    if (!info) return null;
-    if (info.storage === "keychain" && this.keychain) {
-      try {
-        const value = this.keychain.get(`profile:${profile}`);
-        const session2 = value ? decodeSecret(value, info.api) : null;
-        if (session2) return { session: session2, storage: "keychain" };
-      } catch {
+      get credentialsPath() {
+        return join5(this.dir, "credentials.json");
       }
-    }
-    const entry = this.readFileEntries()[profile];
-    const session = asSession(entry?.session) ?? (typeof entry?.token === "string" && entry.token ? { api: info.api, access_token: entry.token } : null);
-    return session ? { session, storage: "file" } : null;
-  }
-  /** The profile's current access token (compatibility helper). */
-  token(profile) {
-    const stored = this.session(profile);
-    return stored ? { token: stored.session.access_token, storage: stored.storage } : null;
-  }
-  /** Forgets a profile's login everywhere. Returns what it had. */
-  remove(profile) {
-    const config = this.readConfig();
-    const info = config.profiles[profile];
-    if (this.keychain) {
-      try {
-        this.keychain.delete(`profile:${profile}`);
-      } catch {
+      get pendingPath() {
+        return join5(this.dir, "pending-login.json");
       }
-    }
-    const entries = this.readFileEntries();
-    if (profile in entries) {
-      delete entries[profile];
-      this.writeFileEntries(entries);
-    }
-    if (info) {
-      delete config.profiles[profile];
-      if (config.defaultProfile === profile) config.defaultProfile = Object.keys(config.profiles)[0];
-      this.writeConfig(config);
-    }
-    return info;
-  }
-  setDefault(profile) {
-    const config = this.readConfig();
-    if (!config.profiles[profile]) throw usageError(`No profile named "${profile}". Run \`homebase profiles\` to list them.`);
-    config.defaultProfile = profile;
-    this.writeConfig(config);
-  }
-  /** A device login waiting to be finished (`homebase login --no-wait`, then `--resume`). */
-  savePending(pending) {
-    this.ensureDir();
-    writePrivate(this.pendingPath, pending);
-  }
-  readPending() {
-    return readJsonFile(this.pendingPath, null);
-  }
-  clearPending() {
-    rmSync(this.pendingPath, { force: true });
-  }
-  /**
-   * Runs `fn` holding a cross-process lock on the profile's refresh (an
-   * O_EXCL lock file). A lock older than LOCK_STALE_MS is taken over (its
-   * holder died). Waits up to LOCK_WAIT_MS, like Claude Code's
-   * ~/.claude/.oauth_refresh.lock.
-   */
-  async withRefreshLock(profile, fn, opts = {}) {
-    this.ensureDir();
-    const path = this.lockPath(profile);
-    const sleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
-    const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
-    let fd;
-    while (fd === void 0) {
-      try {
-        fd = openSync(path, "wx", 384);
-        writeFileSync(fd, `${process.pid} ${(/* @__PURE__ */ new Date()).toISOString()}
-`);
-      } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-        try {
-          if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) {
-            rmSync(path, { force: true });
-            continue;
+      lockPath(profile) {
+        return join5(this.dir, `refresh-${validateProfileName(profile)}.lock`);
+      }
+      ensureDir() {
+        mkdirSync4(this.dir, { recursive: true, mode: 448 });
+      }
+      readConfig() {
+        const config = readJsonFile(this.configPath, { profiles: {} });
+        if (!config.profiles || typeof config.profiles !== "object") config.profiles = {};
+        return config;
+      }
+      writeConfig(config) {
+        this.ensureDir();
+        writePrivate(this.configPath, config);
+      }
+      readFileEntries() {
+        const file = readJsonFile(this.credentialsPath, {});
+        return file.profiles && typeof file.profiles === "object" ? { ...file.profiles } : {};
+      }
+      writeFileEntries(entries) {
+        this.ensureDir();
+        if (!Object.keys(entries).length) {
+          rmSync2(this.credentialsPath, { force: true });
+          return;
+        }
+        writePrivate(this.credentialsPath, { profiles: entries });
+      }
+      /** Saves a login for a profile: keychain first, else the 0600 file. */
+      saveSession(profile, info, session) {
+        validateProfileName(profile);
+        const account = `profile:${profile}`;
+        let storage = "file";
+        if (this.keychain) {
+          try {
+            if (this.keychain.set(account, `Homebase CLI (${profile})`, encodeSession(session))) storage = "keychain";
+          } catch {
+            storage = "file";
           }
-        } catch {
-          continue;
         }
-        if (Date.now() > deadline) {
-          throw new CliError("Another homebase process is renewing this login and didn't finish. Retry in a moment.", { exitCode: EXIT.other, code: "refresh_locked" });
-        }
-        await sleep(50 + Math.floor(Math.random() * 100));
+        const entries = this.readFileEntries();
+        if (storage === "file") entries[profile] = { session };
+        else delete entries[profile];
+        this.writeFileEntries(entries);
+        const config = this.readConfig();
+        const saved = {
+          ...info,
+          api: session.api,
+          auth: canRefresh(session) ? "oauth" : "legacy",
+          storage,
+          savedAt: config.profiles[profile]?.savedAt && config.profiles[profile]?.tokenId === info.tokenId ? config.profiles[profile].savedAt : (/* @__PURE__ */ new Date()).toISOString()
+        };
+        config.profiles[profile] = saved;
+        if (!config.defaultProfile || !config.profiles[config.defaultProfile]) config.defaultProfile = profile;
+        this.writeConfig(config);
+        return saved;
       }
-    }
-    try {
-      return await fn();
-    } finally {
-      closeSync(fd);
-      rmSync(path, { force: true });
-    }
+      /** Saves a bare token (a Settings key, or an older device login) bound to `api`. */
+      save(profile, info, token) {
+        const { api, ...rest } = info;
+        return this.saveSession(profile, rest, { api, access_token: token, scopes: info.scopes, workspace: info.workspace });
+      }
+      /** Replaces the tokens of an existing login (after a refresh), keeping where it is stored. */
+      updateSession(profile, session) {
+        const info = this.readConfig().profiles[profile];
+        if (!info) return;
+        if (info.storage === "keychain" && this.keychain) {
+          try {
+            if (this.keychain.set(`profile:${profile}`, `Homebase CLI (${profile})`, encodeSession(session))) return;
+          } catch {
+          }
+        }
+        const entries = this.readFileEntries();
+        entries[profile] = { session };
+        this.writeFileEntries(entries);
+        if (info.storage !== "file") {
+          const config = this.readConfig();
+          if (config.profiles[profile]) config.profiles[profile].storage = "file";
+          this.writeConfig(config);
+        }
+      }
+      /** A profile's login, or null. Old stores (a bare token) read as a legacy session. */
+      session(profile) {
+        const info = this.readConfig().profiles[profile];
+        if (!info) return null;
+        if (info.storage === "keychain" && this.keychain) {
+          try {
+            const value = this.keychain.get(`profile:${profile}`);
+            const session2 = value ? decodeSecret(value, info.api) : null;
+            if (session2) return { session: session2, storage: "keychain" };
+          } catch {
+          }
+        }
+        const entry = this.readFileEntries()[profile];
+        const session = asSession(entry?.session) ?? (typeof entry?.token === "string" && entry.token ? { api: info.api, access_token: entry.token } : null);
+        return session ? { session, storage: "file" } : null;
+      }
+      /** The profile's current access token (compatibility helper). */
+      token(profile) {
+        const stored = this.session(profile);
+        return stored ? { token: stored.session.access_token, storage: stored.storage } : null;
+      }
+      /** Forgets a profile's login everywhere. Returns what it had. */
+      remove(profile) {
+        const config = this.readConfig();
+        const info = config.profiles[profile];
+        if (this.keychain) {
+          try {
+            this.keychain.delete(`profile:${profile}`);
+          } catch {
+          }
+        }
+        const entries = this.readFileEntries();
+        if (profile in entries) {
+          delete entries[profile];
+          this.writeFileEntries(entries);
+        }
+        if (info) {
+          delete config.profiles[profile];
+          if (config.defaultProfile === profile) config.defaultProfile = Object.keys(config.profiles)[0];
+          this.writeConfig(config);
+        }
+        return info;
+      }
+      setDefault(profile) {
+        const config = this.readConfig();
+        if (!config.profiles[profile]) throw usageError(`No profile named "${profile}". Run \`homebase profiles\` to list them.`);
+        config.defaultProfile = profile;
+        this.writeConfig(config);
+      }
+      /** A device login waiting to be finished (`homebase login --no-wait`, then `--resume`). */
+      savePending(pending2) {
+        this.ensureDir();
+        writePrivate(this.pendingPath, pending2);
+      }
+      readPending() {
+        return readJsonFile(this.pendingPath, null);
+      }
+      clearPending() {
+        rmSync2(this.pendingPath, { force: true });
+      }
+      /**
+       * Runs `fn` holding a cross-process lock on the profile's refresh (an
+       * O_EXCL lock file). A lock older than LOCK_STALE_MS is taken over (its
+       * holder died). Waits up to LOCK_WAIT_MS, like Claude Code's
+       * ~/.claude/.oauth_refresh.lock.
+       */
+      async withRefreshLock(profile, fn, opts = {}) {
+        this.ensureDir();
+        const path = this.lockPath(profile);
+        const sleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+        const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
+        let fd;
+        while (fd === void 0) {
+          try {
+            fd = openSync(path, "wx", 384);
+            writeFileSync4(fd, `${process.pid} ${(/* @__PURE__ */ new Date()).toISOString()}
+`);
+          } catch (error) {
+            if (error.code !== "EEXIST") throw error;
+            try {
+              if (Date.now() - statSync3(path).mtimeMs > LOCK_STALE_MS) {
+                rmSync2(path, { force: true });
+                continue;
+              }
+            } catch {
+              continue;
+            }
+            if (Date.now() > deadline) {
+              throw new CliError("Another homebase process is renewing this login and didn't finish. Retry in a moment.", { exitCode: EXIT.other, code: "refresh_locked" });
+            }
+            await sleep(50 + Math.floor(Math.random() * 100));
+          }
+        }
+        try {
+          return await fn();
+        } finally {
+          closeSync(fd);
+          rmSync2(path, { force: true });
+        }
+      }
+    };
+    LOCK_STALE_MS = 30 * 1e3;
+    LOCK_WAIT_MS = 20 * 1e3;
   }
-};
-var LOCK_STALE_MS = 30 * 1e3;
-var LOCK_WAIT_MS = 20 * 1e3;
+});
 
 // src/oauth.ts
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 function origin(url) {
   return new URL(url).origin;
 }
@@ -593,10 +2338,10 @@ async function send(fetchImpl, url, init) {
   try {
     response = await fetchImpl(url, { ...init, redirect: "manual", headers: { "User-Agent": USER_AGENT, Accept: "application/json", ...init.headers } });
   } catch (error) {
-    const reason = error instanceof Error ? error.cause instanceof Error ? error.cause.message : error.message : String(error);
-    throw new CliError(`Couldn't reach Homebase at ${origin(url)} (${reason}).`, { code: "network_error" });
+    throw new CliError(`Couldn't reach Homebase at ${origin(url)} (${networkReason(error)}).`, { code: "network_error" });
   }
   if (response.status >= 300 && response.status < 400) {
+    await discard(response);
     throw new CliError(`Homebase answered ${new URL(url).pathname} with a redirect, which the CLI never follows with credentials.`, { code: "unexpected_redirect", status: response.status });
   }
   const text = await response.text();
@@ -638,12 +2383,12 @@ function cliClientIdFor(api, endpoints, env) {
   return sameOrigin(api, DEFAULT_API_URL) ? DEFAULT_CLIENT_ID : void 0;
 }
 function createPkce() {
-  const verifier = randomBytes(32).toString("base64url");
+  const verifier = randomBytes2(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge, method: "S256" };
 }
 function randomState() {
-  return randomBytes(24).toString("base64url");
+  return randomBytes2(24).toString("base64url");
 }
 function authorizeUrl(endpoints, params) {
   const url = new URL(endpoints.authorization_endpoint);
@@ -717,22 +2462,16 @@ async function revokeToken(fetchImpl, endpoints, params) {
   const result = await send(fetchImpl, endpoints.revocation_endpoint, form({ token: params.token, client_id: params.clientId }));
   return result.status === 200;
 }
+var init_oauth = __esm({
+  "src/oauth.ts"() {
+    "use strict";
+    init_http();
+    init_constants();
+    init_errors();
+  }
+});
 
 // src/session.ts
-var EnvAuth = class {
-  origin;
-  value;
-  constructor(value, api) {
-    this.value = value;
-    this.origin = origin(api);
-  }
-  async token() {
-    return this.value;
-  }
-  async recover() {
-    return null;
-  }
-};
 function expiresAt(session) {
   if (!session.access_expires_at) return void 0;
   const at = Date.parse(session.access_expires_at);
@@ -751,618 +2490,270 @@ function applyTokens(session, tokens, now) {
     scopes: tokens.scope ? tokens.scope.split(/\s+/).filter(Boolean) : session.scopes
   };
 }
-var ProfileAuth = class {
-  origin;
-  session;
-  legacyNoticeShown = false;
-  now;
-  opts;
-  constructor(opts) {
-    this.opts = opts;
-    this.session = opts.session;
-    this.origin = origin(opts.session.api);
-    this.now = opts.now ?? Date.now;
-  }
-  current() {
-    return this.session;
-  }
-  async token() {
-    if (!canRefresh(this.session)) {
-      if (!this.legacyNoticeShown) {
-        this.legacyNoticeShown = true;
-        this.opts.notice?.(
-          "Note: this saved login is an older kind that doesn't renew itself. Run `homebase login` once to switch to one that stays signed in (and can be revoked as one connection)."
-        );
-      }
-      return this.session.access_token;
-    }
-    if (needsRefresh(this.session, this.now())) await this.refresh(this.session.access_token, false);
-    return this.session.access_token;
-  }
-  async recover(failed, code) {
-    if (code !== "token_expired" && code !== "unauthorized") return null;
-    const stored = this.reload();
-    if (stored && stored.access_token !== failed && sameLogin(stored, this.session)) {
-      this.session = stored;
-      return stored.access_token;
-    }
-    if (!canRefresh(this.session)) return null;
-    await this.refresh(failed, true);
-    return this.session.access_token !== failed ? this.session.access_token : null;
-  }
-  reload() {
-    try {
-      return this.opts.store.session(this.opts.profile)?.session ?? null;
-    } catch {
-      return null;
-    }
-  }
-  /**
-   * Renews under the profile's lock. `failed` is the access token we had;
-   * `force` refreshes even if the saved one still looks valid (after a 401).
-   */
-  async refresh(failed, force) {
-    await this.opts.store.withRefreshLock(
-      this.opts.profile,
-      async () => {
-        const stored = this.reload();
-        if (stored && sameLogin(stored, this.session)) {
-          if (stored.access_token !== failed && !needsRefresh(stored, this.now())) {
-            this.session = stored;
-            return;
-          }
-          this.session = stored;
-        }
-        const session = this.session;
-        if (!canRefresh(session)) return;
-        if (!force && !needsRefresh(session, this.now())) return;
-        const endpoints = endpointsForIssuer(session.api, session.issuer);
-        const outcome = await refreshTokens(this.opts.fetch, endpoints, { refreshToken: session.refresh_token, clientId: session.client_id });
-        if (outcome.ok) {
-          this.session = applyTokens(session, outcome.tokens, this.now());
-          this.opts.store.updateSession(this.opts.profile, this.session);
-          return;
-        }
-        if (outcome.kind === "invalid_grant") {
-          throw new CliError(`Your Homebase login has ended (${outcome.message}). Run \`homebase login\` to sign in again.`, {
-            exitCode: EXIT.auth,
-            code: "login_expired"
-          });
-        }
-        const at = expiresAt(session);
-        if (at !== void 0 && at > this.now() && !force) {
-          this.opts.notice?.(`Note: couldn't renew the Homebase login just now (${outcome.message}); using the current token.`);
-          return;
-        }
-        throw new CliError(`Couldn't renew the Homebase login (${outcome.message}). Check the network and retry.`, {
-          exitCode: EXIT.other,
-          code: "refresh_failed",
-          ...outcome.retryAfterS ? { server: { code: "refresh_failed", message: outcome.message, retry_after_s: outcome.retryAfterS } } : {}
-        });
-      }
-    );
-  }
-};
 function sameLogin(a, b) {
   return a.api === b.api && (a.client_id ?? "") === (b.client_id ?? "");
 }
-
-// src/api.ts
-var realSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
-var MAX_REDIRECTS = 3;
-var Api = class {
-  baseUrl;
-  origin;
-  auth;
-  noAuth;
-  fetchImpl;
-  sleep;
-  onWait;
-  constructor(opts) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
-    this.origin = new URL(this.baseUrl).origin;
-    this.auth = opts.auth ?? (opts.token ? new EnvAuth(opts.token, this.baseUrl) : void 0);
-    if (this.auth && this.auth.origin !== this.origin) {
-      throw new CliError(`Internal error: a credential for ${this.auth.origin} can't be used with ${this.origin}.`, { exitCode: EXIT.usage, code: "origin_mismatch" });
-    }
-    this.noAuth = opts.noAuth;
-    this.fetchImpl = opts.fetch ?? ((input, init) => fetch(input, init));
-    this.sleep = opts.sleep ?? realSleep;
-    this.onWait = opts.onWait;
-  }
-  /** Whether requests will carry a credential. */
-  get hasAuth() {
-    return Boolean(this.auth);
-  }
-  url(path, query) {
-    const url = new URL(this.baseUrl + path);
-    if (url.origin !== this.origin) throw new CliError(`Refusing to call ${url.origin}: not the API origin.`, { code: "origin_mismatch" });
-    for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== void 0) url.searchParams.set(key, String(value));
-    }
-    return url.toString();
-  }
-  /**
-   * One fetch with redirects handled here (redirect: "manual"): a redirect
-   * is followed only within the API origin; to anywhere else it is an error,
-   * so an Authorization header can never be forwarded off-origin.
-   */
-  async fetchSameOrigin(url, init) {
-    let target = url;
-    let current = init;
-    for (let hop = 0; ; hop++) {
-      const response = await this.fetchImpl(target, { ...current, redirect: "manual" });
-      const isRedirect = response.status >= 300 && response.status < 400 && response.status !== 304;
-      if (!isRedirect && response.type !== "opaqueredirect") return response;
-      const location = response.headers.get("Location");
-      let next = null;
-      try {
-        next = location ? new URL(location, target) : null;
-      } catch {
-        next = null;
+var EnvAuth, ProfileAuth;
+var init_session = __esm({
+  "src/session.ts"() {
+    "use strict";
+    init_constants();
+    init_credentials();
+    init_errors();
+    init_oauth();
+    EnvAuth = class {
+      origin;
+      value;
+      constructor(value, api) {
+        this.value = value;
+        this.origin = origin(api);
       }
-      if (!next || next.origin !== this.origin) {
-        throw new CliError(
-          `Homebase at ${this.origin} redirected to ${next ? next.origin : "an unknown location"}. The CLI doesn't follow redirects to other sites with your login; check --api.`,
-          { exitCode: EXIT.other, code: "cross_origin_redirect", status: response.status }
-        );
+      async token() {
+        return this.value;
       }
-      if (hop >= MAX_REDIRECTS) throw new CliError(`Too many redirects from ${this.origin}.`, { code: "too_many_redirects", status: response.status });
-      if (response.status === 303 || (response.status === 301 || response.status === 302) && current.method !== "GET" && current.method !== "HEAD") {
-        current = { ...current, method: "GET", body: void 0 };
+      async recover() {
+        return null;
       }
-      target = next.toString();
-    }
-  }
-  async request(method, path, opts = {}) {
-    const needsAuth = opts.auth !== false;
-    if (needsAuth && !this.auth) {
-      throw this.noAuth?.() ?? new CliError("Not logged in to Homebase. Run `homebase login` (or set HOMEBASE_TOKEN), then retry.", {
-        exitCode: EXIT.auth,
-        code: "not_logged_in"
-      });
-    }
-    const url = this.url(path, opts.query);
-    let token2 = needsAuth ? await this.auth.token() : void 0;
-    let recovered = false;
-    for (let attempt = 0; ; attempt++) {
-      const headers = { "User-Agent": USER_AGENT, Accept: "application/json" };
-      if (token2) headers.Authorization = `Bearer ${token2}`;
-      if (opts.body !== void 0) headers["Content-Type"] = "application/json";
-      let response;
-      try {
-        response = await this.fetchSameOrigin(url, {
-          method,
-          headers,
-          body: opts.body === void 0 ? void 0 : JSON.stringify(opts.body)
-        });
-      } catch (error2) {
-        if (error2 instanceof CliError) throw error2;
-        const reason = error2 instanceof Error ? error2.cause instanceof Error ? error2.cause.message : error2.message : String(error2);
-        throw new CliError(`Couldn't reach Homebase at ${this.baseUrl} (${reason}). Check the network or --api, then retry.`, {
-          exitCode: EXIT.other,
-          code: "network_error"
-        });
+    };
+    ProfileAuth = class {
+      origin;
+      session;
+      legacyNoticeShown = false;
+      now;
+      opts;
+      constructor(opts) {
+        this.opts = opts;
+        this.session = opts.session;
+        this.origin = origin(opts.session.api);
+        this.now = opts.now ?? Date.now;
       }
-      const text = await response.text();
-      let body = text;
-      try {
-        body = text ? JSON.parse(text) : null;
-      } catch {
+      current() {
+        return this.session;
       }
-      if (response.ok) return body;
-      const error = fromServer(response.status, body);
-      if (response.status === 401 && token2 && !recovered) {
-        recovered = true;
-        const next = await this.auth.recover(token2, error.server?.code);
-        if (next && next !== token2) {
-          token2 = next;
-          continue;
+      async token() {
+        if (!canRefresh(this.session)) {
+          if (!this.legacyNoticeShown) {
+            this.legacyNoticeShown = true;
+            this.opts.notice?.(
+              "legacy_login",
+              "This saved login is an older kind that doesn't renew itself. Run `homebase login` once to switch to one that stays signed in (and can be revoked as one connection)."
+            );
+          }
+          return this.session.access_token;
+        }
+        if (needsRefresh(this.session, this.now())) await this.refresh(this.session.access_token, false);
+        return this.session.access_token;
+      }
+      async recover(failed, code2) {
+        if (code2 !== "token_expired" && code2 !== "unauthorized") return null;
+        const stored = this.reload();
+        if (stored && stored.access_token !== failed && sameLogin(stored, this.session)) {
+          this.session = stored;
+          return stored.access_token;
+        }
+        if (!canRefresh(this.session)) return null;
+        await this.refresh(failed, true);
+        return this.session.access_token !== failed ? this.session.access_token : null;
+      }
+      reload() {
+        try {
+          return this.opts.store.session(this.opts.profile)?.session ?? null;
+        } catch {
+          return null;
         }
       }
-      const wait = error.server?.retry_after_s ?? Number(response.headers.get("Retry-After") ?? NaN);
-      if (response.status === 429 && error.code === "rate_limited" && attempt < 2 && Number.isFinite(wait) && wait <= MAX_AUTO_RETRY_S) {
-        this.onWait?.(wait, error.message);
-        await this.sleep(Math.max(1, wait) * 1e3);
-        continue;
+      /**
+       * Renews under the profile's lock. `failed` is the access token we had;
+       * `force` refreshes even if the saved one still looks valid (after a 401).
+       */
+      async refresh(failed, force) {
+        await this.opts.store.withRefreshLock(
+          this.opts.profile,
+          async () => {
+            const stored = this.reload();
+            if (stored && sameLogin(stored, this.session)) {
+              if (stored.access_token !== failed && !needsRefresh(stored, this.now())) {
+                this.session = stored;
+                return;
+              }
+              this.session = stored;
+            }
+            const session = this.session;
+            if (!canRefresh(session)) return;
+            if (!force && !needsRefresh(session, this.now())) return;
+            const endpoints = endpointsForIssuer(session.api, session.issuer);
+            const outcome = await refreshTokens(this.opts.fetch, endpoints, { refreshToken: session.refresh_token, clientId: session.client_id });
+            if (outcome.ok) {
+              this.session = applyTokens(session, outcome.tokens, this.now());
+              this.opts.store.updateSession(this.opts.profile, this.session);
+              return;
+            }
+            if (outcome.kind === "invalid_grant") {
+              throw new CliError(`Your Homebase login has ended (${outcome.message}). Run \`homebase login\` to sign in again.`, {
+                exitCode: EXIT.auth,
+                code: "login_expired"
+              });
+            }
+            const at = expiresAt(session);
+            if (at !== void 0 && at > this.now() && !force) {
+              this.opts.notice?.("refresh_deferred", `Couldn't renew the Homebase login just now (${outcome.message}); using the current token.`);
+              return;
+            }
+            throw new CliError(`Couldn't renew the Homebase login (${outcome.message}). Check the network and retry.`, {
+              exitCode: EXIT.other,
+              code: "refresh_failed",
+              ...outcome.retryAfterS ? { server: { code: "refresh_failed", message: outcome.message, retry_after_s: outcome.retryAfterS } } : {}
+            });
+          }
+        );
       }
-      throw error;
-    }
-  }
-  get(path, query) {
-    return this.request("GET", path, { query });
-  }
-  post(path, body = {}) {
-    return this.request("POST", path, { body });
-  }
-  patch(path, body) {
-    return this.request("PATCH", path, { body });
-  }
-};
-
-// src/output.ts
-function interactive(io) {
-  return io.isTTY && (io.stdinTTY ?? io.isTTY);
-}
-function processIo() {
-  const isTTY = Boolean(process.stderr.isTTY);
-  return {
-    stdout: (text) => process.stdout.write(text),
-    stderr: (text) => process.stderr.write(text),
-    isTTY,
-    color: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR && process.env.TERM !== "dumb",
-    stdinTTY: Boolean(process.stdin.isTTY),
-    stdoutTTY: Boolean(process.stdout.isTTY)
-  };
-}
-function printJson(io, value) {
-  io.stdout(JSON.stringify(value) + "\n");
-}
-function style(io) {
-  const wrap = (open2, close) => (text) => io.color ? `\x1B[${open2}m${text}\x1B[${close}m` : text;
-  return { bold: wrap("1", "22"), dim: wrap("2", "22"), cyan: wrap("36", "39"), yellow: wrap("33", "39"), red: wrap("31", "39"), green: wrap("32", "39") };
-}
-function isoFromMs(ms) {
-  if (typeof ms === "string" && ms) return ms;
-  return typeof ms === "number" && Number.isFinite(ms) ? new Date(ms).toISOString() : void 0;
-}
-function shortDate(value) {
-  if (value === void 0 || value === null || value === "") return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString().slice(0, 10);
-}
-function formatBytes(bytes) {
-  if (bytes === void 0 || !Number.isFinite(bytes)) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
-}
-var CONTROL = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-?]*[ -/]*[@-~]|[\u0000-\u001f\u007f-\u009f]/g;
-function stripControl(text) {
-  return text.replace(CONTROL, "");
-}
-function shellQuote(text) {
-  return `'${stripControl(text).replace(/'/g, "'\\''")}'`;
-}
-function truncate(text, max) {
-  const clean = stripControl(text).replace(/\s+/g, " ").trim();
-  return clean.length <= max ? clean : `${clean.slice(0, Math.max(1, max - 1))}\u2026`;
-}
-var OWN_SGR = /^\u001b\[(?:1|2|22|31|32|33|36|39)m$/;
-function safeCell(text) {
-  return text.replace(CONTROL, (match) => OWN_SGR.test(match) ? match : "");
-}
-function table(rows, gap = "  ") {
-  if (!rows.length) return "";
-  const safe = rows.map((row) => row.map(safeCell));
-  const widths = [];
-  for (const row of safe) row.forEach((cell, index) => widths[index] = Math.max(widths[index] ?? 0, visibleLength(cell)));
-  return safe.map((row) => row.map((cell, index) => index === row.length - 1 ? cell : cell + " ".repeat(widths[index] - visibleLength(cell))).join(gap).trimEnd()).join("\n");
-}
-function visibleLength(text) {
-  return text.replace(/\u001b\[[0-9;]*m/g, "").length;
-}
-function searchResultJson(result) {
-  return {
-    id: result.id,
-    title: result.title,
-    type: result.type,
-    source: result.source,
-    buckets: (result.buckets ?? []).map((bucket) => ({ id: bucket.id, name: bucket.name })),
-    latestAt: isoFromMs(result.latestAt),
-    uploadedAt: isoFromMs(result.uploadedAt),
-    fileCreatedAt: isoFromMs(result.fileCreatedAt),
-    tags: result.tags ?? [],
-    aiTags: result.aiTags ?? [],
-    snippet: result.snippet
-  };
-}
-function interpretationJson(interpretation) {
-  if (!interpretation) return void 0;
-  const out = { ...interpretation };
-  const range = interpretation.dateRange;
-  if (range && typeof range === "object") {
-    out.dateRange = { ...range, from: isoFromMs(range.from) ?? range.from, to: isoFromMs(range.to) ?? range.to };
-  }
-  return out;
-}
-function searchJson(response) {
-  return {
-    interpretation: interpretationJson(response.interpretation),
-    groups: (response.groups ?? []).map((group) => ({
-      label: group.label,
-      kind: group.kind,
-      results: (group.results ?? []).map(searchResultJson)
-    })),
-    total: response.total ?? 0,
-    nextCursor: response.nextCursor ?? null,
-    textOnly: response.textOnly ?? false
-  };
-}
-function assetSummaryJson(asset) {
-  return {
-    id: asset.id,
-    title: asset.title,
-    type: asset.type,
-    mimeType: asset.mimeType,
-    size: asset.size,
-    source: asset.source,
-    tags: asset.tags ?? [],
-    buckets: (asset.buckets ?? []).map((bucket) => ({ id: bucket.id, name: bucket.name })),
-    linkUrl: asset.linkUrl,
-    appUrl: asset.appUrl ?? asset.url,
-    indexing: asset.indexing?.status
-  };
-}
-function bucketJson(bucket) {
-  return {
-    id: bucket.id,
-    name: bucket.name,
-    slug: bucket.slug,
-    description: bucket.description,
-    itemCount: bucket.itemCount ?? 0,
-    shareUrl: bucket.shareUrl,
-    createdAt: bucket.createdAt,
-    updatedAt: bucket.updatedAt
-  };
-}
-function describeInterpretation(interpretation) {
-  if (!interpretation) return [];
-  const parts = [];
-  const buckets2 = interpretation.buckets;
-  if (buckets2?.length) parts.push(`bucket ${buckets2.map((bucket) => `\u201C${bucket.name}\u201D`).join(", ")}`);
-  const range = interpretation.dateRange;
-  if (range) parts.push(range.label ?? `${shortDate(range.from)}\u2013${shortDate(range.to)}`);
-  const types = interpretation.fileTypes;
-  if (types?.length) parts.push(`type ${types.join("/")}`);
-  const tags = interpretation.tags;
-  if (tags?.length) parts.push(`tags ${tags.map((tag2) => `#${tag2}`).join(" ")}`);
-  if (typeof interpretation.source === "string") parts.push(`added by ${interpretation.source}`);
-  const terms = interpretation.terms;
-  if (terms?.length) parts.push(`words \u201C${terms.join(" ")}\u201D`);
-  if (typeof interpretation.sort === "string" && interpretation.sort !== "relevance") parts.push(`${interpretation.sort} first`);
-  const lines = [parts.length ? parts.join(" \xB7 ") : "plain text search"];
-  for (const note of interpretation.notes ?? []) lines.push(note);
-  return lines;
-}
-function renderSearch(io, response, query) {
-  const s = style(io);
-  const out = [];
-  const [summary, ...notes] = describeInterpretation(response.interpretation);
-  if (query) out.push(`${s.bold("Search")} ${query}`);
-  if (summary) out.push(`${s.dim("Read as:")} ${summary}`);
-  for (const note of notes) out.push(s.dim(`  ${note}`));
-  const groups = response.groups ?? [];
-  if (!groups.some((group) => group.results?.length)) {
-    out.push("", "No matches. Rephrase the question, or drop a bucket, date or type from it.");
-    return out.join("\n");
-  }
-  for (const group of groups) {
-    if (!group.results?.length) continue;
-    out.push("", s.bold(group.label));
-    out.push(
-      table(
-        group.results.map((result) => [
-          s.cyan(result.id),
-          result.type,
-          shortDate(result.latestAt ?? result.uploadedAt),
-          truncate(result.title, 48) + (result.tags?.length ? s.dim(`  ${result.tags.map((tag2) => `#${tag2}`).join(" ")}`) : "")
-        ])
-      ).split("\n").map((line) => `  ${line}`).join("\n")
-    );
-  }
-  const shown = groups.reduce((sum, group) => sum + (group.results?.length ?? 0), 0);
-  out.push("", s.dim(`${shown} shown of ${response.total ?? shown}.`));
-  if (response.nextCursor) out.push(s.dim(`More: homebase search --cursor ${response.nextCursor}`));
-  return out.join("\n");
-}
-function renderAsset(io, asset) {
-  const s = style(io);
-  const rows = [
-    ["Id", asset.id],
-    ["Type", [asset.type, asset.mimeType, asset.size ? formatBytes(asset.size) : ""].filter(Boolean).join(" \xB7 ")],
-    ["Added", [shortDate(asset.uploadedAt), asset.source === "agent" ? "by an agent" : "", asset.addedBy ? `(${asset.addedBy})` : ""].filter(Boolean).join(" ")]
-  ];
-  if (asset.latestAt && asset.latestAt !== asset.uploadedAt) rows.push(["Latest", shortDate(asset.latestAt)]);
-  if (asset.fileCreatedAt) rows.push(["Created", shortDate(asset.fileCreatedAt)]);
-  if (asset.versionsCount && asset.versionsCount > 1) rows.push(["Version", `${asset.version ?? asset.versionsCount} of ${asset.versionsCount}`]);
-  rows.push(["Buckets", asset.buckets?.length ? asset.buckets.map((bucket) => bucket.name).join(", ") : "none (library only)"]);
-  rows.push(["Tags", asset.tags?.length ? asset.tags.map((tag2) => `#${tag2}`).join(" ") : "none"]);
-  if (asset.aiTags?.length) rows.push(["AI tags", asset.aiTags.join(", ")]);
-  if (asset.linkUrl) rows.push(["Link", asset.linkUrl]);
-  if (asset.thumbnailUrl) rows.push(["Preview", asset.thumbnailUrl]);
-  if (asset.appUrl ?? asset.url) rows.push(["Open", asset.appUrl ?? asset.url]);
-  if (asset.indexing?.status && asset.indexing.status !== "done") rows.push(["Indexing", [asset.indexing.status, asset.indexing.reason].filter(Boolean).join(": ")]);
-  const out = [s.bold(asset.title), table(rows.map(([key, value]) => [s.dim(key), value]))];
-  if (asset.description) out.push("", asset.description);
-  if (asset.visibleText) out.push("", s.dim("Visible text:"), truncate(asset.visibleText, 600));
-  return out.join("\n");
-}
-function renderBuckets(io, buckets2, nextCursor) {
-  const s = style(io);
-  if (!buckets2.length) return "No buckets yet. Create one with `homebase bucket create <name>`.";
-  const out = [
-    table([
-      [s.dim("ID"), s.dim("ITEMS"), s.dim("UPDATED"), s.dim("NAME")],
-      ...buckets2.map((bucket) => [s.cyan(bucket.id), String(bucket.itemCount ?? 0), shortDate(bucket.updatedAt ?? bucket.createdAt), bucket.name])
-    ])
-  ];
-  if (nextCursor) out.push("", s.dim(`More: homebase buckets --cursor ${nextCursor}`));
-  return out.join("\n");
-}
-
-// src/context.ts
-function openInBrowser(url) {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return Promise.resolve(false);
-  } catch {
-    return Promise.resolve(false);
-  }
-  const [command, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["rundll32.exe", ["url.dll,FileProtocolHandler", url]] : ["xdg-open", [url]];
-  return new Promise((resolve4) => {
-    try {
-      const child = spawn(command, args, { stdio: "ignore", detached: true });
-      child.on("error", () => resolve4(false));
-      child.on("spawn", () => {
-        child.unref();
-        resolve4(true);
-      });
-    } catch {
-      resolve4(false);
-    }
-  });
-}
-function promptConfirm(io) {
-  return async (question) => {
-    if (!process.stdin.isTTY || !io.isTTY) return false;
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    try {
-      const answer = await new Promise((resolve4) => rl.question(`${question} [y/N] `, resolve4));
-      return /^y(es)?$/i.test(answer.trim());
-    } finally {
-      rl.close();
-    }
-  };
-}
-var LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])$/;
-function normalizeApiUrl(raw, source = "--api") {
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw usageError(`${source} must be a full URL like ${DEFAULT_API_URL}.`);
-  }
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOST.test(url.hostname))) {
-    throw usageError(`${source} must use https (plain http only for localhost, 127.0.0.1 or [::1]).`);
-  }
-  if (url.username || url.password) throw usageError(`${source} can't contain a user name or password.`);
-  return url.toString().replace(/\/+$/, "");
-}
-function originOf(url) {
-  return new URL(url).origin;
-}
-function resolveCredential(args) {
-  const { env, store, config, apiUrl } = args;
-  const target = originOf(apiUrl);
-  const envToken = env.HOMEBASE_TOKEN?.trim();
-  if (envToken) {
-    const home = args.envApi ?? config.profiles[args.profile]?.api ?? DEFAULT_API_URL;
-    if (originOf(home) === target) return { auth: new EnvAuth(envToken, apiUrl), tokenSource: "env", profile: args.profile };
-    return {
-      tokenSource: "none",
-      profile: args.profile,
-      noAuth: () => usageError(
-        `HOMEBASE_TOKEN is for ${originOf(home)}, so it isn't sent to ${target} (from ${args.apiSource === "flag" ? "--api" : "HOMEBASE_API_URL"}). Homebase never sends a token to a server it wasn't issued for.`,
-        `To use a token with ${target}, set HOMEBASE_API_URL=${target} alongside HOMEBASE_TOKEN, or run \`homebase login --api ${target}\`.`
-      )
     };
   }
-  const candidates = args.profileExplicit ? [args.profile] : [args.profile, ...Object.keys(config.profiles).filter((name) => name !== args.profile)];
-  for (const name of candidates) {
-    const info = config.profiles[name];
-    if (!info || originOf(info.api) !== target) continue;
-    const stored = store.session(name);
-    if (!stored || originOf(stored.session.api) !== target) continue;
-    const auth = new ProfileAuth({ store, profile: name, session: stored.session, fetch: args.fetch, sleep: args.sleep, notice: args.notice });
-    return { auth, tokenSource: stored.storage, profile: name };
-  }
-  const saved = config.profiles[args.profile];
-  if (saved && originOf(saved.api) !== target) {
-    const via = args.apiSource === "flag" ? "--api" : "HOMEBASE_API_URL";
-    return {
-      tokenSource: "none",
-      profile: args.profile,
-      noAuth: () => usageError(
-        `Your saved login (profile ${args.profile}) is for ${originOf(saved.api)}, not ${target} (from ${via}). Homebase never sends a saved login to another server.`,
-        `To use ${target}, run \`homebase login --api ${target} --profile <name>\`, or set HOMEBASE_TOKEN for it.`
-      )
+});
+
+// src/api.ts
+var realSleep, MAX_REDIRECTS2, Api;
+var init_api = __esm({
+  "src/api.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    init_http();
+    init_session();
+    realSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+    MAX_REDIRECTS2 = 3;
+    Api = class {
+      baseUrl;
+      origin;
+      auth;
+      noAuth;
+      fetchImpl;
+      sleep;
+      onWait;
+      constructor(opts) {
+        this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+        this.origin = new URL(this.baseUrl).origin;
+        this.auth = opts.auth ?? (opts.token ? new EnvAuth(opts.token, this.baseUrl) : void 0);
+        if (this.auth && this.auth.origin !== this.origin) {
+          throw new CliError(`Internal error: a credential for ${this.auth.origin} can't be used with ${this.origin}.`, { exitCode: EXIT.usage, code: "origin_mismatch" });
+        }
+        this.noAuth = opts.noAuth;
+        this.fetchImpl = opts.fetch ?? nodeFetch;
+        this.sleep = opts.sleep ?? realSleep;
+        this.onWait = opts.onWait;
+      }
+      /** Whether requests will carry a credential. */
+      get hasAuth() {
+        return Boolean(this.auth);
+      }
+      url(path, query) {
+        const url = new URL(this.baseUrl + path);
+        if (url.origin !== this.origin) throw new CliError(`Refusing to call ${url.origin}: not the API origin.`, { code: "origin_mismatch" });
+        for (const [key, value] of Object.entries(query ?? {})) {
+          if (value !== void 0) url.searchParams.set(key, String(value));
+        }
+        return url.toString();
+      }
+      /**
+       * One fetch with redirects handled here (redirect: "manual"): a redirect
+       * is followed only within the API origin; to anywhere else it is an error,
+       * so an Authorization header can never be forwarded off-origin.
+       */
+      async fetchSameOrigin(url, init) {
+        let target = url;
+        let current = init;
+        for (let hop = 0; ; hop++) {
+          const response = await this.fetchImpl(target, { ...current, redirect: "manual" });
+          const isRedirect = response.status >= 300 && response.status < 400 && response.status !== 304;
+          if (!isRedirect && response.type !== "opaqueredirect") return response;
+          const location = response.headers.get("Location");
+          await discard(response);
+          let next = null;
+          try {
+            next = location ? new URL(location, target) : null;
+          } catch {
+            next = null;
+          }
+          if (!next || next.origin !== this.origin) {
+            throw new CliError(
+              `Homebase at ${this.origin} redirected to ${next ? next.origin : "an unknown location"}. The CLI doesn't follow redirects to other sites with your login; check --api.`,
+              { exitCode: EXIT.other, code: "cross_origin_redirect", status: response.status }
+            );
+          }
+          if (hop >= MAX_REDIRECTS2) throw new CliError(`Too many redirects from ${this.origin}.`, { code: "too_many_redirects", status: response.status });
+          if (response.status === 303 || (response.status === 301 || response.status === 302) && current.method !== "GET" && current.method !== "HEAD") {
+            current = { ...current, method: "GET", body: void 0 };
+          }
+          target = next.toString();
+        }
+      }
+      async request(method, path, opts = {}) {
+        const needsAuth = opts.auth !== false;
+        if (needsAuth && !this.auth) {
+          throw this.noAuth?.() ?? new CliError("Not logged in to Homebase. Run `homebase login` (or set HOMEBASE_TOKEN), then retry.", {
+            exitCode: EXIT.auth,
+            code: "not_logged_in"
+          });
+        }
+        const url = this.url(path, opts.query);
+        let token = needsAuth ? await this.auth.token() : void 0;
+        let recovered = false;
+        for (let attempt = 0; ; attempt++) {
+          const headers = { "User-Agent": USER_AGENT, Accept: "application/json" };
+          if (token) headers.Authorization = `Bearer ${token}`;
+          if (opts.body !== void 0) headers["Content-Type"] = "application/json";
+          let response;
+          try {
+            response = await this.fetchSameOrigin(url, {
+              method,
+              headers,
+              body: opts.body === void 0 ? void 0 : JSON.stringify(opts.body)
+            });
+          } catch (error2) {
+            if (error2 instanceof CliError) throw error2;
+            const reason = networkReason(error2);
+            throw new CliError(`Couldn't reach Homebase at ${this.baseUrl} (${reason}). Check the network or --api, then retry.`, {
+              exitCode: EXIT.other,
+              code: "network_error"
+            });
+          }
+          const text = await response.text();
+          let body = text;
+          try {
+            body = text ? JSON.parse(text) : null;
+          } catch {
+          }
+          if (response.ok) return body;
+          const error = fromServer(response.status, body);
+          if (response.status === 401 && token && !recovered) {
+            recovered = true;
+            const next = await this.auth.recover(token, error.server?.code);
+            if (next && next !== token) {
+              token = next;
+              continue;
+            }
+          }
+          const wait = error.server?.retry_after_s ?? Number(response.headers.get("Retry-After") ?? NaN);
+          if (response.status === 429 && error.code === "rate_limited" && attempt < 2 && Number.isFinite(wait) && wait <= MAX_AUTO_RETRY_S) {
+            this.onWait?.(wait, error.message);
+            await this.sleep(Math.max(1, wait) * 1e3);
+            continue;
+          }
+          throw error;
+        }
+      }
+      get(path, query) {
+        return this.request("GET", path, { query });
+      }
+      post(path, body = {}) {
+        return this.request("POST", path, { body });
+      }
+      patch(path, body) {
+        return this.request("PATCH", path, { body });
+      }
     };
   }
-  return { tokenSource: "none", profile: args.profile };
-}
-function createCtx(parsed, overrides = {}) {
-  const io = overrides.io ?? processIo();
-  const env = overrides.env ?? process.env;
-  const store = overrides.store ?? new CredentialStore({ dir: void 0, env });
-  const json = Boolean(parsed.values.json);
-  const config = store.readConfig();
-  const namedProfile = stringOption(parsed.values.profile) ?? env.HOMEBASE_PROFILE;
-  const profile = validateProfileName(namedProfile ?? config.defaultProfile ?? "default");
-  const profileInfo = config.profiles[profile];
-  const flagApi = stringOption(parsed.values.api);
-  const envApi = env.HOMEBASE_API_URL?.trim() || void 0;
-  const apiSource = flagApi ? "flag" : envApi ? "env" : profileInfo ? "profile" : "default";
-  const apiUrl = flagApi ? normalizeApiUrl(flagApi, "--api") : envApi ? normalizeApiUrl(envApi, "HOMEBASE_API_URL") : normalizeApiUrl(profileInfo?.api ?? DEFAULT_API_URL);
-  const fetchImpl = overrides.fetch ?? ((input, init) => fetch(input, init));
-  const sleep = overrides.sleep ?? realSleep;
-  const notices = /* @__PURE__ */ new Set();
-  const notice = (message) => {
-    if (notices.has(message)) return;
-    notices.add(message);
-    io.stderr(`${message}
-`);
-  };
-  const usual = profileInfo?.api ?? DEFAULT_API_URL;
-  if ((apiSource === "flag" || apiSource === "env") && originOf(apiUrl) !== originOf(usual)) {
-    notice(`Note: using the Homebase API at ${originOf(apiUrl)} (from ${apiSource === "flag" ? "--api" : "HOMEBASE_API_URL"}), not ${originOf(usual)}.`);
-  }
-  const credential = resolveCredential({
-    env,
-    store,
-    config,
-    profile,
-    profileExplicit: namedProfile !== void 0,
-    apiUrl,
-    apiSource,
-    flagApi,
-    envApi: envApi ? normalizeApiUrl(envApi, "HOMEBASE_API_URL") : void 0,
-    fetch: fetchImpl,
-    sleep,
-    notice
-  });
-  const api = new Api({
-    baseUrl: apiUrl,
-    auth: credential.auth,
-    noAuth: credential.noAuth,
-    fetch: fetchImpl,
-    sleep,
-    onWait: (seconds, message) => {
-      if (!json) io.stderr(`${message} Waiting ${seconds}s\u2026
-`);
-    }
-  });
-  return {
-    io,
-    json,
-    env,
-    apiUrl,
-    apiSource,
-    apiExplicit: apiSource === "flag" || apiSource === "env",
-    profile: credential.profile,
-    profileExplicit: namedProfile !== void 0,
-    profileInfo: config.profiles[credential.profile],
-    store,
-    auth: credential.auth,
-    tokenSource: credential.tokenSource,
-    fetch: fetchImpl,
-    sleep,
-    api,
-    openUrl: overrides.openUrl ?? openInBrowser,
-    confirm: overrides.confirm ?? promptConfirm(io),
-    cwd: overrides.cwd ?? process.cwd()
-  };
-}
-
-// src/commands/auth.ts
-import { hostname } from "node:os";
+});
 
 // src/device.ts
 async function postJson(fetchImpl, url, body) {
@@ -1464,11 +2855,15 @@ async function pollDeviceLogin(opts) {
   }
   throw new CliError("The login code expired before it was approved. Run `homebase login` again.", { exitCode: EXIT.auth, code: "expired_token" });
 }
+var init_device = __esm({
+  "src/device.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+  }
+});
 
 // src/loopback.ts
-import { createServer } from "node:http";
-var CALLBACK_PATH = "/callback";
-var escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 function callbackPage(ok, title, message) {
   const mark = ok ? "\u2713" : "!";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} \xB7 Homebase CLI</title>
@@ -1498,15 +2893,16 @@ async function startLoopback(opts) {
     settle = { resolve: resolve4, reject };
   });
   result.catch(() => void 0);
-  let done = false;
+  let done2 = false;
   let port = 0;
+  const { createServer } = nodeRequire("node:http");
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (done || request.method !== "GET" || url.pathname !== CALLBACK_PATH || request.headers.host !== `127.0.0.1:${port}`) {
+    if (done2 || request.method !== "GET" || url.pathname !== CALLBACK_PATH || request.headers.host !== `127.0.0.1:${port}`) {
       reply(response, 404, callbackPage(false, "Not found", "This address only completes a Homebase CLI login."));
       return;
     }
-    done = true;
+    done2 = true;
     const finish = (error2, value) => {
       response.on("finish", () => close());
       if (error2) settle.reject(error2);
@@ -1530,14 +2926,14 @@ async function startLoopback(opts) {
       finish(new CliError(denied ? "The login was denied in the browser. Nothing was saved." : `The login failed: ${description}`, { exitCode: EXIT.auth, code: error }));
       return;
     }
-    const code = params.get("code");
-    if (!code) {
+    const code2 = params.get("code");
+    if (!code2) {
       reply(response, 400, callbackPage(false, "Login failed", "The sign-in response had no code. Return to your terminal and run `homebase login` again."));
       finish(new CliError("The browser returned no authorization code. Run `homebase login` again.", { exitCode: EXIT.auth, code: "invalid_request" }));
       return;
     }
     reply(response, 200, callbackPage(true, "You're signed in to the Homebase CLI", "You can close this tab and return to your terminal."));
-    finish(void 0, { code, iss: params.get("iss") ?? void 0 });
+    finish(void 0, { code: code2, iss: params.get("iss") ?? void 0 });
   });
   await new Promise((resolve4, reject) => {
     server.once("error", reject);
@@ -1548,16 +2944,16 @@ async function startLoopback(opts) {
   });
   port = server.address().port;
   const timer = setTimeout(() => {
-    if (done) return;
-    done = true;
+    if (done2) return;
+    done2 = true;
     settle.reject(new CliError(`No approval arrived within ${Math.round(opts.timeoutMs / 6e4)} minutes. Run \`homebase login\` again.`, { exitCode: EXIT.auth, code: "login_timeout" }));
     close();
   }, opts.timeoutMs);
   timer.unref?.();
   function close() {
     clearTimeout(timer);
-    if (!done) {
-      done = true;
+    if (!done2) {
+      done2 = true;
       settle.reject(new CliError("The login was cancelled.", { exitCode: EXIT.auth, code: "login_cancelled" }));
     }
     server.close();
@@ -1565,8 +2961,25 @@ async function startLoopback(opts) {
   }
   return { port, redirectUri: `http://127.0.0.1:${port}${CALLBACK_PATH}`, result, close };
 }
+var CALLBACK_PATH, escapeHtml;
+var init_loopback = __esm({
+  "src/loopback.ts"() {
+    "use strict";
+    init_errors();
+    init_http();
+    CALLBACK_PATH = "/callback";
+    escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  }
+});
 
 // src/commands/auth.ts
+var auth_exports = {};
+__export(auth_exports, {
+  commands: () => commands4,
+  deviceName: () => deviceName,
+  headlessReason: () => headlessReason
+});
+import { hostname } from "node:os";
 function settingsUrl(workspaceUrl) {
   if (!workspaceUrl) return void 0;
   return workspaceUrl.replace(/\/library\/?$/, "") + "/settings/agents";
@@ -1637,48 +3050,28 @@ async function saveLogin(ctx, profile, session, extra) {
     await revokeSession(ctx, previous.session);
   }
   ctx.store.clearPending();
-  const refreshing = canRefresh(session);
-  const result = {
+  if (ctx.env.HOMEBASE_TOKEN) ctx.notice("env_token_set", "HOMEBASE_TOKEN is set in this shell and takes precedence over the saved login.");
+  return {
     event: "logged_in",
     profile,
     api: session.api,
     flow: extra.flow,
-    workspace,
+    workspace: workspace ? { name: workspace.name, slug: workspace.slug } : void 0,
     user: me ? { name: me.user.name, email: me.user.email, role: me.user.role } : void 0,
     scopes,
-    token_name: me?.token.name ?? extra.tokenName,
     storage: saved.storage,
-    renews: refreshing
+    renews: canRefresh(session)
   };
-  if (ctx.json) {
-    printJson(ctx.io, result);
-    return;
-  }
-  const s = style(ctx.io);
-  const where = saved.storage === "keychain" ? ctx.store.keychain?.name ?? "the keychain" : ctx.store.credentialsPath;
-  ctx.io.stdout(
-    [
-      `${s.green("\u2713")} Logged in to ${s.bold(workspace?.name ?? "Homebase")}${me?.user.name ? ` as ${me.user.name}` : ""}.`,
-      `  Profile ${profile} \xB7 \u201C${result.token_name ?? "Homebase CLI"}\u201D \xB7 stored in ${where}`,
-      `  Permissions: ${scopes.map((scope) => SCOPE_LABELS[scope] ?? scope).join(", ")}`,
-      refreshing ? "  Stays signed in (renews itself); revoke it any time in Settings \u2192 Agents." : ""
-    ].filter(Boolean).join("\n") + "\n"
-  );
-  if (ctx.env.HOMEBASE_TOKEN) ctx.io.stderr("Note: HOMEBASE_TOKEN is set in this shell and takes precedence over the saved login.\n");
 }
-async function finishDeviceLogin(ctx, pending) {
-  const token2 = await pollDeviceLogin({
+async function finishDeviceLogin(ctx, pending2) {
+  const token = await pollDeviceLogin({
     fetch: ctx.fetch,
     sleep: ctx.sleep,
-    api: pending.api,
-    start: pending,
-    deadline: Date.parse(pending.expires_at),
-    onPoll: (state, interval) => {
-      if (!ctx.json && state === "slow_down") ctx.io.stderr(`Polling slower (every ${interval}s)\u2026
-`);
-    }
+    api: pending2.api,
+    start: pending2,
+    deadline: Date.parse(pending2.expires_at)
   });
-  await saveLogin(ctx, pending.profile, sessionFrom(pending.api, token2, pending.client_id), { flow: "device", tokenName: token2.token_name, workspace: token2.workspace });
+  return saveLogin(ctx, pending2.profile, sessionFrom(pending2.api, token, pending2.client_id), { flow: "device", tokenName: token.token_name, workspace: token.workspace });
 }
 async function deviceLogin(ctx, parsed) {
   let clientId;
@@ -1688,44 +3081,30 @@ async function deviceLogin(ctx, parsed) {
     clientId = cliClientIdFor(ctx.apiUrl, void 0, ctx.env);
   }
   const started = await startDeviceLogin(ctx.fetch, ctx.apiUrl, deviceName(), { clientId, scopes: parsed.scopes, workspace: parsed.workspace });
-  const pending = {
+  const pending2 = {
     ...started,
     api: ctx.apiUrl,
     profile: parsed.profile,
     expires_at: new Date(Date.now() + started.expires_in * 1e3).toISOString(),
     ...clientId ? { client_id: clientId } : {}
   };
-  if (parsed.noWait) ctx.store.savePending(pending);
+  if (parsed.noWait) ctx.store.savePending(pending2);
   const opened = parsed.noBrowser || parsed.reason ? false : await ctx.openUrl(started.verification_uri_complete);
-  const nextStep = parsed.noWait ? "Ask the user to open verification_uri_complete (on any device), check the code matches, pick the workspace and approve. Then run `homebase login --resume`." : "Ask the user to open verification_uri_complete (on any device), check the code matches, pick the workspace and approve. This command keeps waiting and prints a logged_in event when done.";
-  if (ctx.json) {
-    printJson(ctx.io, {
-      event: "login_started",
-      flow: "device",
-      verification_uri_complete: started.verification_uri_complete,
-      verification_uri: started.verification_uri,
-      user_code: started.user_code,
-      expires_at: pending.expires_at,
-      profile: parsed.profile,
-      browser_opened: opened,
-      ...parsed.reason ? { why_device: parsed.reason } : {},
-      next_step: nextStep
-    });
-  } else {
-    const s = style(ctx.io);
-    ctx.io.stderr(
-      [
-        parsed.reason ? `Using a device login because ${parsed.reason}.` : "",
-        opened ? "Opened your browser to approve this login." : "Open this link on any device to approve this login:",
-        `  ${s.cyan(started.verification_uri_complete)}`,
-        `  Code: ${s.bold(started.user_code)} (check it matches the page)`,
-        parsed.noWait ? "Then run `homebase login --resume`." : "Waiting for approval\u2026 (Ctrl-C to cancel)",
-        ""
-      ].filter((line, index) => line !== "" || index > 0).join("\n")
-    );
-  }
-  if (parsed.noWait) return;
-  await finishDeviceLogin(ctx, pending);
+  const ask = "Give the user verification_url (it opens on any device) and user_code; they check the code matches, pick the workspace and approve.";
+  const event = {
+    event: "login_started",
+    flow: "device",
+    verification_url: started.verification_uri_complete,
+    user_code: started.user_code,
+    expires_at: pending2.expires_at,
+    profile: parsed.profile,
+    browser_opened: opened,
+    ...parsed.reason ? { why_device: parsed.reason } : {},
+    next_step: parsed.noWait ? `${ask} Then run \`homebase login --resume\`.` : `${ask} This command waits and then prints a logged_in event.`
+  };
+  if (parsed.noWait) return event;
+  ctx.emit(event);
+  return finishDeviceLogin(ctx, pending2);
 }
 async function browserLogin(ctx, parsed) {
   const endpoints = await discover(ctx.fetch, ctx.apiUrl);
@@ -1748,28 +3127,15 @@ async function browserLogin(ctx, parsed) {
     loopback.close();
     return { done: false, reason: "no browser could be opened" };
   }
-  if (ctx.json) {
-    printJson(ctx.io, {
-      event: "login_started",
-      flow: "browser",
-      authorize_url: url,
-      redirect_uri: loopback.redirectUri,
-      expires_at: new Date(Date.now() + parsed.timeoutMs).toISOString(),
-      profile: parsed.profile,
-      browser_opened: opened,
-      next_step: "Ask the user to open authorize_url in a browser on this same computer, check the workspace and permissions, and click Approve. This command waits and prints a logged_in event. On another device, use `homebase login --device` instead."
-    });
-  } else {
-    const s = style(ctx.io);
-    ctx.io.stderr(
-      [
-        opened ? "Opened your browser to sign in to Homebase. Approve there, then come back here." : "Open this link in a browser on this computer to sign in:",
-        `  ${s.cyan(url)}`,
-        "Waiting for approval\u2026 (Ctrl-C to cancel; on another device, use `homebase login --device`)",
-        ""
-      ].join("\n")
-    );
-  }
+  ctx.emit({
+    event: "login_started",
+    flow: "browser",
+    verification_url: url,
+    expires_at: new Date(Date.now() + parsed.timeoutMs).toISOString(),
+    profile: parsed.profile,
+    browser_opened: opened,
+    next_step: (opened ? "The approval page is open in the browser on this computer. " : "Give the user verification_url to open in a browser on this same computer. ") + "They check the workspace and permissions and click Approve; this command waits and then prints a logged_in event. On another device, use `homebase login --device --no-wait` instead."
+  });
   let callback;
   try {
     callback = await loopback.result;
@@ -1780,8 +3146,7 @@ async function browserLogin(ctx, parsed) {
     throw new CliError(`The sign-in response came from ${callback.iss}, not ${endpoints.issuer}. Nothing was saved.`, { exitCode: EXIT.auth, code: "issuer_mismatch" });
   }
   const tokens = await exchangeCode(ctx.fetch, endpoints, { code: callback.code, verifier: pkce.verifier, redirectUri: loopback.redirectUri, clientId });
-  await saveLogin(ctx, parsed.profile, sessionFrom(ctx.apiUrl, tokens, clientId), { flow: "browser" });
-  return { done: true };
+  return { done: true, result: await saveLogin(ctx, parsed.profile, sessionFrom(ctx.apiUrl, tokens, clientId), { flow: "browser" }) };
 }
 function loginProfile(ctx) {
   const existing = ctx.store.readConfig().profiles[ctx.profile];
@@ -1793,1284 +3158,111 @@ function loginProfile(ctx) {
   }
   return ctx.profile;
 }
-var login = {
-  spec: {
-    name: "login",
-    summary: "Sign this computer in to a Homebase workspace in your browser (one click if you're signed in there).",
-    usage: "homebase login [--workspace <slug>] [--scopes <list>] [--device] [--no-browser] [--no-wait | --resume] [--profile <name>] [--json]",
-    options: {
-      workspace: { type: "string", value: "slug", description: "Preselect this workspace on the approval page" },
-      scopes: { type: "string", value: "list", description: `Permissions to ask for, comma-separated (default: the everyday set). Any of ${ALL_SCOPES.join(", ")}` },
-      device: { type: "boolean", description: "Approve with a code from any device (SSH, headless). Chosen automatically when needed" },
-      "no-browser": { type: "boolean", description: "Don't open a browser; print the link to open yourself" },
-      "no-wait": { type: "boolean", description: "Device login: print the link and exit; finish later with --resume" },
-      resume: { type: "boolean", description: "Finish a device login started with --no-wait" },
-      yes: { type: "boolean", short: "y", description: "Confirm logging in to a non-default API from HOMEBASE_API_URL" }
-    },
-    maxArgs: 0,
-    examples: [
-      "homebase login",
-      "homebase login --workspace acme",
-      "homebase login --device                     # over SSH or without a browser",
-      "homebase login --json --no-browser          # agents: relay authorize_url to the user",
-      "homebase login --profile client-acme"
-    ]
-  },
-  async run(ctx, parsed) {
-    if (parsed.values["no-wait"] && parsed.values.resume) throw usageError("Use either --no-wait or --resume.");
-    if (parsed.values.resume) {
-      const pending = ctx.store.readPending();
-      if (!pending) throw usageError("There's no login waiting to be finished. Run `homebase login`.");
-      if (Date.parse(pending.expires_at) < Date.now()) {
-        ctx.store.clearPending();
-        throw new CliError("That login code expired. Run `homebase login` again.", { exitCode: EXIT.auth, code: "expired_token" });
+var login, logout, whoami, profiles, profilesUse, commands4;
+var init_auth = __esm({
+  "src/commands/auth.ts"() {
+    "use strict";
+    init_api();
+    init_args();
+    init_constants();
+    init_credentials();
+    init_errors();
+    init_device();
+    init_loopback();
+    init_oauth();
+    init_session();
+    login = async (ctx, parsed) => {
+      if (parsed.values["no-wait"] && parsed.values.resume) throw usageError("Use either --no-wait or --resume.");
+      if (parsed.values.resume) {
+        const pending2 = ctx.store.readPending();
+        if (!pending2) throw usageError("There's no login waiting to be finished. Run `homebase login`.");
+        if (Date.parse(pending2.expires_at) < Date.now()) {
+          ctx.store.clearPending();
+          throw new CliError("That login code expired. Run `homebase login` again.", { exitCode: EXIT.auth, code: "expired_token" });
+        }
+        return finishDeviceLogin(ctx, pending2);
       }
-      if (!ctx.json) ctx.io.stderr(`Waiting for approval of ${pending.user_code}\u2026
-`);
-      await finishDeviceLogin(ctx, pending);
-      return;
-    }
-    if (ctx.apiSource === "env" && !sameOrigin(ctx.apiUrl, DEFAULT_API_URL) && !parsed.values.yes) {
-      const question = `HOMEBASE_API_URL points this login at ${origin(ctx.apiUrl)}, not ${origin(DEFAULT_API_URL)}. Sign in there and save a login for it?`;
-      const ok = !ctx.json && ctx.io.isTTY ? await ctx.confirm(question) : false;
-      if (!ok) {
+      if (ctx.apiSource === "env" && !sameOrigin(ctx.apiUrl, DEFAULT_API_URL)) {
         throw usageError(
-          `Not logging in to ${origin(ctx.apiUrl)}: it comes from HOMEBASE_API_URL, which a project's environment can set without you noticing.`,
-          `If you meant it, run \`homebase login --api ${origin(ctx.apiUrl)}\` (or add --yes).`
+          `Not logging in to ${origin(ctx.apiUrl)}: it comes from HOMEBASE_API_URL, which a project's environment can set without the user noticing.`,
+          `If the user means that server, run \`homebase login --api ${origin(ctx.apiUrl)}\`.`
         );
       }
-    }
-    const profile = loginProfile(ctx);
-    const scopes = parseScopes(parsed.values.scopes);
-    const workspace = parseWorkspace(parsed.values.workspace);
-    const noWait = Boolean(parsed.values["no-wait"]);
-    const noBrowser = Boolean(parsed.values["no-browser"]);
-    const timeoutMs = Number(ctx.env.HOMEBASE_LOGIN_TIMEOUT_MS) > 0 ? Number(ctx.env.HOMEBASE_LOGIN_TIMEOUT_MS) : LOGIN_TIMEOUT_MS;
-    const headless = headlessReason(ctx.env);
-    if (parsed.values.device || noWait || headless) {
-      await deviceLogin(ctx, { noWait, noBrowser, scopes, workspace, profile, reason: parsed.values.device || noWait ? void 0 : headless });
-      return;
-    }
-    const browser = await browserLogin(ctx, { noBrowser, scopes, workspace, profile, timeoutMs });
-    if (!browser.done) await deviceLogin(ctx, { noWait: false, noBrowser, scopes, workspace, profile, reason: browser.reason });
-  }
-};
-var logout = {
-  spec: {
-    name: "logout",
-    summary: "Sign this profile out: end its login on the server and forget it on this computer.",
-    usage: "homebase logout [--profile <name>] [--keep-token] [--json]",
-    options: { "keep-token": { type: "boolean", description: "Only forget it here; don't revoke it on the server" } },
-    maxArgs: 0
-  },
-  async run(ctx, parsed) {
-    const stored = ctx.store.session(ctx.profile);
-    const revoke = parsed.values["keep-token"] || !stored ? { revoked: false, how: "none" } : await revokeSession(ctx, stored.session);
-    const removed = ctx.store.remove(ctx.profile);
-    const revokeAt = settingsUrl(removed?.workspace?.url);
-    const note = removed && !revoke.revoked ? `${revoke.detail ? `${revoke.detail} ` : ""}The login still works until it is revoked: revoke \u201C${removed.tokenName ?? "Homebase CLI"}\u201D in Settings \u2192 Agents${revokeAt ? ` (${revokeAt})` : ""}.` : void 0;
-    if (ctx.json) {
-      printJson(ctx.io, {
+      const profile = loginProfile(ctx);
+      const scopes = parseScopes(parsed.values.scopes);
+      const workspace = parseWorkspace(parsed.values.workspace);
+      const noWait = Boolean(parsed.values["no-wait"]);
+      const noBrowser = Boolean(parsed.values["no-browser"]);
+      const timeoutMs = Number(ctx.env.HOMEBASE_LOGIN_TIMEOUT_MS) > 0 ? Number(ctx.env.HOMEBASE_LOGIN_TIMEOUT_MS) : LOGIN_TIMEOUT_MS;
+      const headless = headlessReason(ctx.env);
+      if (parsed.values.device || noWait || headless) {
+        return deviceLogin(ctx, { noWait, noBrowser, scopes, workspace, profile, reason: parsed.values.device || noWait ? void 0 : headless });
+      }
+      const browser = await browserLogin(ctx, { noBrowser, scopes, workspace, profile, timeoutMs });
+      if (browser.done) return browser.result;
+      return deviceLogin(ctx, { noWait: false, noBrowser, scopes, workspace, profile, reason: browser.reason });
+    };
+    logout = async (ctx, parsed) => {
+      const stored = ctx.store.session(ctx.profile);
+      const revoke = parsed.values["keep-token"] || !stored ? { revoked: false, how: "none" } : await revokeSession(ctx, stored.session);
+      const removed = ctx.store.remove(ctx.profile);
+      const revokeAt = settingsUrl(removed?.workspace?.url);
+      const note = removed && !revoke.revoked ? `${revoke.detail ? `${revoke.detail} ` : ""}The login still works until it is revoked: revoke \u201C${removed.tokenName ?? "Homebase CLI"}\u201D in Settings \u2192 Agents${revokeAt ? ` (${revokeAt})` : ""}.` : void 0;
+      if (ctx.env.HOMEBASE_TOKEN) ctx.notice("env_token_set", "HOMEBASE_TOKEN is still set in this shell; unset it to stop using that token.");
+      return {
         profile: ctx.profile,
         removed: Boolean(removed),
         revoked: revoke.revoked,
         ...revoke.how !== "none" ? { revoke: revoke.how } : {},
-        revoke_url: revoke.revoked ? void 0 : revokeAt,
-        env_token_set: Boolean(ctx.env.HOMEBASE_TOKEN),
-        next_step: note
-      });
-      return;
-    }
-    if (!removed) ctx.io.stdout(`No saved login for profile ${ctx.profile}.
-`);
-    else ctx.io.stdout(`Logged out of ${removed.workspace?.name ?? "Homebase"} (profile ${ctx.profile})${revoke.revoked ? "; the login is revoked" : ""}.
-${note ? `${note}
-` : ""}`);
-    if (ctx.env.HOMEBASE_TOKEN) ctx.io.stderr("HOMEBASE_TOKEN is still set in this shell; unset it to stop using that token.\n");
-  }
-};
-function usageRows(me) {
-  const used = me.usage?.used ?? {};
-  const limits = me.usage?.limits ?? {};
-  return [.../* @__PURE__ */ new Set([...Object.keys(limits), ...Object.keys(used)])].map((metric) => ({ metric, used: used[metric] ?? 0, limit: limits[metric] }));
-}
-var whoami = {
-  spec: {
-    name: "whoami",
-    aliases: ["status"],
-    summary: "Show the workspace, person, permissions and this month's usage for the current token.",
-    usage: "homebase whoami [--json]",
-    maxArgs: 0
-  },
-  async run(ctx) {
-    const me = await ctx.api.get("/v1/me");
-    const session = ctx.auth instanceof ProfileAuth ? ctx.auth.current() : void 0;
-    const login2 = session ? canRefresh(session) ? { kind: "oauth", renews: true, access_expires_at: session.access_expires_at } : { kind: "legacy", renews: false } : { kind: ctx.tokenSource === "env" ? "env" : "none", renews: false };
-    if (ctx.json) {
-      printJson(ctx.io, { profile: ctx.tokenSource === "env" ? null : ctx.profile, tokenSource: ctx.tokenSource, api: ctx.apiUrl, login: login2, ...me });
-      return;
-    }
-    const s = style(ctx.io);
-    const rows = [
-      [s.dim("Workspace"), `${s.bold(me.workspace.name)} (${me.workspace.slug})`],
-      [s.dim("You"), [me.user.name, me.user.email && `<${me.user.email}>`, me.user.role && `\xB7 ${me.user.role}`].filter(Boolean).join(" ")],
-      [s.dim("Token"), `${me.token.name} \xB7 from ${ctx.tokenSource === "env" ? "HOMEBASE_TOKEN" : `profile ${ctx.profile} (${ctx.tokenSource})`}`],
-      [s.dim("Permissions"), me.token.scopes.join(", ") || "none"],
-      [
-        s.dim("Login"),
-        login2.kind === "oauth" ? `renews itself (current access until ${shortDate(session?.access_expires_at)}${expiresAt(session) ? ` ${new Date(expiresAt(session)).toLocaleTimeString()}` : ""})` : login2.kind === "legacy" ? "older kind without renewal: run `homebase login` to upgrade" : "HOMEBASE_TOKEN"
-      ],
-      [s.dim("Plan"), `${me.subscription?.plan ?? "?"} (${me.subscription?.status ?? "?"})`]
-    ];
-    if (me.workspace.url) rows.push([s.dim("Library"), me.workspace.url]);
-    const usage = usageRows(me).map(({ metric, used, limit }) => {
-      const fmt = metric === "uploadBytes" ? formatBytes : (n) => n.toLocaleString("en-US");
-      return [`  ${metric}`, `${fmt(used)} / ${limit === void 0 ? "\u221E" : fmt(limit)}`];
-    });
-    ctx.io.stdout(
-      [
-        table(rows),
-        "",
-        s.dim(`Usage ${me.usage?.period ?? ""} (resets ${shortDate(me.usage?.resetsAt)})`),
-        table(usage),
-        me.rateLimit?.perMinute ? s.dim(`Rate limit: ${me.rateLimit.remaining ?? "?"}/${me.rateLimit.perMinute} requests left this minute`) : ""
-      ].filter((line) => line !== void 0).join("\n").trimEnd() + "\n"
-    );
-  }
-};
-var profiles = {
-  spec: {
-    name: "profiles",
-    summary: "List saved logins (one per workspace or account).",
-    usage: "homebase profiles [--json]",
-    maxArgs: 0
-  },
-  async run(ctx) {
-    const config = ctx.store.readConfig();
-    const list = Object.entries(config.profiles).map(([name, info]) => ({
-      name,
-      default: name === config.defaultProfile,
-      workspace: info.workspace,
-      api: info.api,
-      scopes: info.scopes ?? [],
-      storage: info.storage,
-      savedAt: info.savedAt
-    }));
-    if (ctx.json) {
-      printJson(ctx.io, { defaultProfile: config.defaultProfile ?? null, profiles: list });
-      return;
-    }
-    if (!list.length) {
-      ctx.io.stdout("No saved logins. Run `homebase login`.\n");
-      return;
-    }
-    const s = style(ctx.io);
-    ctx.io.stdout(
-      table([
-        [s.dim(""), s.dim("PROFILE"), s.dim("WORKSPACE"), s.dim("STORED IN"), s.dim("SINCE")],
-        ...list.map((profile) => [profile.default ? "*" : "", profile.name, profile.workspace?.name ?? "?", profile.storage, shortDate(profile.savedAt)])
-      ]) + "\n"
-    );
-  }
-};
-var profilesUse = {
-  spec: {
-    name: "profiles use",
-    summary: "Make a saved profile the default.",
-    usage: "homebase profiles use <name>",
-    minArgs: 1,
-    maxArgs: 1
-  },
-  async run(ctx, parsed) {
-    const name = parsed.positionals[0];
-    ctx.store.setDefault(name);
-    if (ctx.json) printJson(ctx.io, { defaultProfile: name });
-    else ctx.io.stdout(`Default profile is now ${name}.
-`);
-  }
-};
-var authCommands = [login, logout, whoami, profiles, profilesUse];
-
-// src/commands/buckets.ts
-function looksLikeId(value) {
-  return /^[0-9a-z]{31,32}$/.test(value);
-}
-async function listAllBuckets(api, maxPages = 25) {
-  const all = [];
-  let cursor;
-  for (let page = 0; page < maxPages; page++) {
-    const result = await api.get("/v1/buckets", { limit: 200, cursor });
-    all.push(...result.buckets);
-    if (!result.nextCursor) break;
-    cursor = result.nextCursor;
-  }
-  return all;
-}
-function matchBucket(buckets2, ref) {
-  const byId = buckets2.find((bucket) => bucket.id === ref);
-  if (byId) return byId;
-  const needle = ref.trim().toLowerCase();
-  const exact = buckets2.filter((bucket) => bucket.name.toLowerCase() === needle || bucket.slug?.toLowerCase() === needle);
-  if (exact.length === 1) return exact[0];
-  if (exact.length > 1) return { ambiguous: exact };
-  const partial = buckets2.filter((bucket) => bucket.name.toLowerCase().includes(needle));
-  if (partial.length === 1) return partial[0];
-  if (partial.length > 1) return { ambiguous: partial };
-  return void 0;
-}
-async function resolveBucket(api, ref, opts = {}) {
-  if (looksLikeId(ref)) return { id: ref };
-  const match = matchBucket(await listAllBuckets(api), ref);
-  if (!match) {
-    throw new CliError(`No bucket called \u201C${ref}\u201D. List them with \`homebase buckets\`, or create it with \`homebase bucket create "${ref}"\`.`, {
-      exitCode: EXIT.notFound,
-      code: "bucket_not_found"
-    });
-  }
-  if ("ambiguous" in match) {
-    throw usageError(
-      `\u201C${ref}\u201D matches ${match.ambiguous.length} buckets: ${match.ambiguous.slice(0, 8).map((bucket) => `${bucket.name} (${bucket.id})`).join(", ")}. Use the exact name or the id.`
-    );
-  }
-  const needle = ref.trim().toLowerCase();
-  if (opts.write && match.name.toLowerCase() !== needle && match.slug?.toLowerCase() !== needle) {
-    throw usageError(`\u201C${ref}\u201D only partly matches \u201C${match.name}\u201D. Changing a bucket needs its exact name or id; did you mean \u201C${match.name}\u201D (${match.id})?`);
-  }
-  return { id: match.id, name: match.name };
-}
-var buckets = {
-  spec: {
-    name: "buckets",
-    summary: "List the workspace's buckets (client handoffs / campaigns), newest first.",
-    usage: "homebase buckets [--limit <n>] [--cursor <c>] [--all] [--json]",
-    options: {
-      limit: { type: "string", value: "n", description: "Buckets per page, 1-200 (default 100)" },
-      cursor: { type: "string", value: "cursor", description: "nextCursor from the previous page" },
-      all: { type: "boolean", description: "Fetch every page" }
-    },
-    maxArgs: 0
-  },
-  async run(ctx, parsed) {
-    let list;
-    let nextCursor = null;
-    if (parsed.values.all) {
-      list = await listAllBuckets(ctx.api);
-    } else {
-      const page = await ctx.api.get("/v1/buckets", {
-        limit: intOption(parsed.values.limit, "limit", 1, 200),
-        cursor: stringOption(parsed.values.cursor)
-      });
-      list = page.buckets;
-      nextCursor = page.nextCursor;
-    }
-    if (ctx.json) printJson(ctx.io, { buckets: list.map(bucketJson), nextCursor });
-    else ctx.io.stdout(renderBuckets(ctx.io, list, nextCursor) + "\n");
-  }
-};
-var bucketCreate = {
-  spec: {
-    name: "bucket create",
-    summary: "Create a bucket (needs the Manage buckets permission).",
-    usage: 'homebase bucket create <name> [--description "\u2026"] [--json]',
-    options: { description: { type: "string", value: "text", description: "What the bucket is for" } },
-    minArgs: 1,
-    examples: ['homebase bucket create "Acme spring launch" --description "Final assets for the Acme handoff"']
-  },
-  async run(ctx, parsed) {
-    const name = parsed.positionals.join(" ").trim();
-    if (!name) throw usageError("The bucket needs a name.");
-    const bucket = await ctx.api.post("/v1/buckets", { name, description: stringOption(parsed.values.description) });
-    if (ctx.json) printJson(ctx.io, bucketJson(bucket));
-    else ctx.io.stdout(`Created bucket ${style(ctx.io).bold(bucket.name)} (${bucket.id})${bucket.shareUrl ? `
-  Share page: ${bucket.shareUrl}` : ""}
-`);
-  }
-};
-function bucketMembership(action) {
-  return {
-    spec: {
-      name: `bucket ${action}`,
-      summary: action === "add" ? "Add library assets to a bucket (the asset isn't copied; it's the same asset in more places)." : "Take assets out of a bucket. They stay in the library.",
-      usage: `homebase bucket ${action} <bucket id|name> <asset id\u2026> [--json]`,
-      minArgs: 2
-    },
-    async run(ctx, parsed) {
-      const [ref, ...ids] = parsed.positionals;
-      if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
-      const bucket = await resolveBucket(ctx.api, ref, { write: true });
-      const result = await ctx.api.post(`/v1/buckets/${encodeURIComponent(bucket.id)}/assets`, {
-        [action]: ids
-      });
-      if (ctx.json) {
-        printJson(ctx.io, { bucket: { id: bucket.id, name: bucket.name }, added: result.added, removed: result.removed, notFound: result.notFound ?? [] });
-        return;
-      }
-      const count = action === "add" ? result.added : result.removed;
-      ctx.io.stdout(`${action === "add" ? "Added" : "Removed"} ${count} asset${count === 1 ? "" : "s"} ${action === "add" ? "to" : "from"} ${bucket.name ?? bucket.id}.
-`);
-      if (result.notFound?.length) ctx.io.stderr(`Not found: ${result.notFound.join(", ")}
-`);
-    }
-  };
-}
-var DATE_KEYS = ["addedAt", "latestAt", "uploadedAt", "updatedAt", "fileCreatedAt"];
-function isoDates(item) {
-  const out = { ...item };
-  for (const key of DATE_KEYS) if (typeof out[key] === "number") out[key] = isoFromMs(out[key]);
-  return out;
-}
-var bucketLs = {
-  spec: {
-    name: "bucket ls",
-    aliases: ["bucket list", "bucket show"],
-    summary: "List what's in a bucket (its assets, in the bucket's order).",
-    usage: "homebase bucket ls <bucket id|name> [--limit <n>] [--cursor <c>] [--all] [--json]",
-    options: {
-      limit: { type: "string", value: "n", description: "Per page, 1-200 (default 100)" },
-      cursor: { type: "string", value: "cursor", description: "nextCursor from the previous page" },
-      all: { type: "boolean", description: "Fetch every page" }
-    },
-    minArgs: 1,
-    examples: ['homebase bucket ls "Summer campaign 2026" --json']
-  },
-  async run(ctx, parsed) {
-    const bucket = await resolveBucket(ctx.api, parsed.positionals.join(" "));
-    const path = `/v1/buckets/${encodeURIComponent(bucket.id)}/assets`;
-    const items = [];
-    let cursor = stringOption(parsed.values.cursor);
-    let nextCursor = null;
-    let name = bucket.name;
-    try {
-      for (let page = 0; page < (parsed.values.all ? 50 : 1); page++) {
-        const body = await ctx.api.get(path, {
-          limit: intOption(parsed.values.limit, "limit", 1, 200),
-          cursor
-        });
-        name ??= body.bucket?.name;
-        items.push(...(body.assets ?? body.items ?? []).map(isoDates));
-        nextCursor = body.nextCursor ?? null;
-        if (!nextCursor) break;
-        cursor = nextCursor;
-      }
-    } catch (error) {
-      if (isMissingRoute(error)) {
-        throw unsupportedError(
-          "listing a bucket's contents",
-          `Search inside it instead: homebase search "${name ?? "files"}" --bucket ${bucket.id} --ignore date --json`
-        );
-      }
-      throw error;
-    }
-    if (ctx.json) {
-      printJson(ctx.io, { bucket: { id: bucket.id, name }, assets: items, nextCursor });
-      return;
-    }
-    const s = style(ctx.io);
-    if (!items.length) {
-      ctx.io.stdout(`${name ?? bucket.id} is empty.
-`);
-      return;
-    }
-    ctx.io.stdout(
-      [
-        s.bold(name ?? bucket.id),
-        table(
-          items.map((item) => [
-            s.cyan(item.id),
-            item.type,
-            shortDate(item.latestAt ?? item.uploadedAt),
-            truncate(item.title, 56) + (item.tags?.length ? s.dim(`  ${item.tags.map((tag2) => `#${tag2}`).join(" ")}`) : "")
-          ])
-        ).split("\n").map((line) => `  ${line}`).join("\n"),
-        nextCursor ? s.dim(`More: homebase bucket ls ${bucket.id} --cursor ${nextCursor}`) : ""
-      ].filter(Boolean).join("\n") + "\n"
-    );
-  }
-};
-var SHARE_NOTE = "Homebase agents never send anything to clients. Give this link to the user; sending it is their call.";
-var shareLink = {
-  spec: {
-    name: "share-link",
-    summary: "Print a bucket's client share link. Sending it is up to you; Homebase never sends it.",
-    usage: "homebase share-link <bucket id|name> [--json]",
-    minArgs: 1,
-    examples: ['homebase share-link "Summer campaign 2026"']
-  },
-  async run(ctx, parsed) {
-    const ref = parsed.positionals.join(" ");
-    const bucket = await resolveBucket(ctx.api, ref);
-    let link;
-    let source = "share-link";
-    try {
-      link = await ctx.api.get(`/v1/buckets/${encodeURIComponent(bucket.id)}/share-link`);
-    } catch (error) {
-      if (!isMissingRoute(error)) throw error;
-      const found = (await listAllBuckets(ctx.api)).find((entry) => entry.id === bucket.id);
-      if (!found?.shareUrl) throw unsupportedError("share links", "Copy the link from the bucket's Share button in the web app.");
-      link = { url: found.shareUrl, name: found.name };
-      source = "bucket";
-    }
-    const url = link.url ?? link.shareUrl;
-    if (!url) throw new CliError(`\u201C${bucket.name ?? ref}\u201D has no share link. Turn sharing on from the bucket's Share button in the web app.`, { code: "no_share_link", exitCode: EXIT.notFound });
-    const live = link.live ?? link.enabled;
-    if (ctx.json) {
-      printJson(ctx.io, { bucket: { id: bucket.id, name: bucket.name ?? link.name }, url, ...live !== void 0 ? { live } : {}, source, note: SHARE_NOTE });
-      return;
-    }
-    ctx.io.stdout(`${url}
-`);
-    ctx.io.stderr(`${live === false ? "This link is turned off; the client can't open it until you turn sharing on.\n" : ""}${SHARE_NOTE}
-`);
-  }
-};
-var bucketCommands = [buckets, bucketCreate, bucketMembership("add"), bucketMembership("remove"), bucketLs, shareLink];
-
-// src/commands/library.ts
-import { createReadStream, createWriteStream, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename as basename2, join as join3, relative, resolve as resolve2 } from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-
-// src/files.ts
-import { readdirSync, statSync as statSync2 } from "node:fs";
-import { basename, extname, join as join2, resolve, sep } from "node:path";
-var MIME = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  avif: "image/avif",
-  svg: "image/svg+xml",
-  heic: "image/heic",
-  heif: "image/heif",
-  tif: "image/tiff",
-  tiff: "image/tiff",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
-  psd: "image/vnd.adobe.photoshop",
-  pdf: "application/pdf",
-  doc: "application/msword",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  xls: "application/vnd.ms-excel",
-  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ppt: "application/vnd.ms-powerpoint",
-  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  rtf: "application/rtf",
-  txt: "text/plain",
-  md: "text/markdown",
-  markdown: "text/markdown",
-  csv: "text/csv",
-  json: "application/json",
-  zip: "application/zip",
-  ai: "application/postscript",
-  eps: "application/postscript",
-  ttf: "font/ttf",
-  otf: "font/otf",
-  woff: "font/woff",
-  woff2: "font/woff2",
-  mp3: "audio/mpeg",
-  wav: "audio/wav",
-  m4a: "audio/mp4",
-  aac: "audio/aac",
-  ogg: "audio/ogg",
-  flac: "audio/flac",
-  mp4: "video/mp4",
-  m4v: "video/x-m4v",
-  mov: "video/quicktime",
-  webm: "video/webm",
-  avi: "video/x-msvideo",
-  mkv: "video/x-matroska"
-};
-var EXTENSION_FOR = {
-  "image/jpeg": "jpg",
-  "text/plain": "txt",
-  "text/markdown": "md",
-  "image/svg+xml": "svg",
-  "image/tiff": "tiff",
-  "application/postscript": "eps"
-};
-function mimeFor(path) {
-  return MIME[extname(path).slice(1).toLowerCase()] ?? "application/octet-stream";
-}
-function extensionFor(mimeType) {
-  if (!mimeType) return void 0;
-  const clean = mimeType.split(";")[0].trim().toLowerCase();
-  if (EXTENSION_FOR[clean]) return EXTENSION_FOR[clean];
-  return Object.entries(MIME).find(([, mime]) => mime === clean)?.[0];
-}
-function safeFilename(name) {
-  const cleaned = name.replace(/[\u0000-\u001f<>:"/\\|?*]+/g, " ").replace(/\s+/g, " ").trim().replace(/^\.+/, "").slice(0, 180);
-  return cleaned || "download";
-}
-function downloadFilename(opts) {
-  const fromHeader = filenameFromDisposition(opts.contentDisposition);
-  if (fromHeader) return safeFilename(fromHeader);
-  const ext = extensionFor(opts.mimeType) ?? urlExtension(opts.url);
-  const title = safeFilename(opts.title);
-  if (!ext) return title;
-  const current = extname(title).slice(1).toLowerCase();
-  if (current === ext || ext === "jpg" && current === "jpeg") return title;
-  return `${title}.${ext}`;
-}
-function urlExtension(url) {
-  if (!url) return void 0;
-  try {
-    const ext = extname(new URL(url).pathname).slice(1).toLowerCase();
-    return ext && ext.length <= 5 && MIME[ext] ? ext : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function filenameFromDisposition(header) {
-  if (!header) return void 0;
-  const star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(header);
-  if (star) {
-    try {
-      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
-    } catch {
-    }
-  }
-  const plain = /filename\s*=\s*"?([^";]+)"?/.exec(header);
-  return plain?.[1]?.trim() || void 0;
-}
-function uniquePath(path, exists) {
-  if (!exists(path)) return path;
-  const ext = extname(path);
-  const stem = path.slice(0, path.length - ext.length);
-  for (let n = 2; n < 1e3; n++) {
-    const candidate = `${stem} (${n})${ext}`;
-    if (!exists(candidate)) return candidate;
-  }
-  return `${stem} (${Date.now()})${ext}`;
-}
-var GLOB_CHARS = /[*?[]/;
-function globToRegExp(pattern) {
-  let out = "";
-  for (let i = 0; i < pattern.length; i++) {
-    const char = pattern[i];
-    if (char === "*") {
-      if (pattern[i + 1] === "*") {
-        const slash = pattern[i + 2] === "/";
-        out += slash ? "(?:.*/)?" : ".*";
-        i += slash ? 2 : 1;
-      } else out += "[^/]*";
-    } else if (char === "?") out += "[^/]";
-    else if (char === "[") {
-      const end = pattern.indexOf("]", i);
-      if (end === -1) out += "\\[";
-      else {
-        out += `[${pattern.slice(i + 1, end).replace(/\\/g, "\\\\")}]`;
-        i = end;
-      }
-    } else out += char.replace(/[.+^${}()|\\]/g, "\\$&");
-  }
-  return new RegExp(`^${out}$`);
-}
-function walk(dir, recursive, out) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.name.startsWith(".")) continue;
-    const full = join2(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (recursive) walk(full, recursive, out);
-    } else if (entry.isFile()) out.push(full);
-  }
-}
-function expandUploadArgs(args, opts) {
-  const files = [];
-  for (const arg of args) {
-    const absolute = resolve(opts.cwd, arg);
-    let stat;
-    try {
-      stat = statSync2(absolute);
-    } catch {
-      stat = void 0;
-    }
-    if (stat?.isFile()) {
-      files.push(absolute);
-      continue;
-    }
-    if (stat?.isDirectory()) {
-      if (!opts.recursive) throw usageError(`${arg} is a folder. Pass --recursive to upload everything in it.`);
-      walk(absolute, true, files);
-      continue;
-    }
-    if (GLOB_CHARS.test(arg)) {
-      const normalized = absolute.split(sep).join("/");
-      const parts = normalized.split("/");
-      const firstGlob = parts.findIndex((part) => GLOB_CHARS.test(part));
-      const base = parts.slice(0, firstGlob).join("/") || "/";
-      const regex = globToRegExp(normalized);
-      const deep = normalized.includes("**") || parts.length - firstGlob > 1;
-      const candidates = [];
-      walk(base, deep, candidates);
-      const matched = candidates.filter((candidate) => regex.test(candidate.split(sep).join("/")));
-      if (!matched.length) throw usageError(`No files match ${arg}.`);
-      files.push(...matched);
-      continue;
-    }
-    throw usageError(`No such file: ${arg}`);
-  }
-  return [...new Set(files)];
-}
-
-// src/progress.ts
-import { Transform } from "node:stream";
-function progressMeter(io, enabled, label, total) {
-  if (!enabled || !io.isTTY) return { update: () => {
-  }, finish: () => {
-  } };
-  let last = 0;
-  const name = truncate(label, 40);
-  const draw = (done) => {
-    const pct = total ? `${Math.min(100, Math.floor(done / total * 100)).toString().padStart(3)}%` : "";
-    io.stderr(`\r\x1B[2K${name}  ${pct} ${formatBytes(done)}${total ? ` / ${formatBytes(total)}` : ""}`);
-  };
-  return {
-    update(done) {
-      const now = Date.now();
-      if (now - last < 100 && done !== total) return;
-      last = now;
-      draw(done);
-    },
-    finish() {
-      io.stderr("\r\x1B[2K");
-    }
-  };
-}
-function countingStream(onBytes) {
-  let total = 0;
-  return new Transform({
-    transform(chunk, _encoding, callback) {
-      total += chunk.length;
-      onBytes(total);
-      callback(null, chunk);
-    }
-  });
-}
-
-// src/commands/library.ts
-var FILE_TYPES = ["image", "document", "video", "link", "embed", "other"];
-var assetPath = (id) => `/v1/assets/${encodeURIComponent(id)}`;
-var FILTER_OPTIONS = {
-  type: { type: "string", value: "type", description: "Only image, document, video, link, embed or other" },
-  bucket: { type: "string", value: "id|name", description: "Only this bucket, or none for assets in no bucket" },
-  tag: { type: "string", value: "tag", description: "Only assets with this tag" },
-  source: { type: "string", value: "who", description: "Only assets added by human or agent" }
-};
-async function searchFilters(ctx, parsed) {
-  const filters = {};
-  const top = {};
-  const type = stringOption(parsed.values.type);
-  if (type) {
-    if (!FILE_TYPES.includes(type)) throw usageError(`--type must be one of ${FILE_TYPES.join(", ")}.`);
-    filters.fileType = type;
-    top.type = type;
-  }
-  const source = stringOption(parsed.values.source);
-  if (source) {
-    if (source !== "human" && source !== "agent") throw usageError("--source must be human or agent.");
-    filters.source = source;
-    top.source = source;
-  }
-  const tag2 = stringOption(parsed.values.tag);
-  if (tag2) {
-    filters.tag = tag2;
-    top.tag = tag2;
-  }
-  const bucket = stringOption(parsed.values.bucket);
-  if (bucket) {
-    const id = bucket === "none" ? "none" : (await resolveBucket(ctx.api, bucket)).id;
-    filters.bucket = id;
-    top.bucketId = id;
-  }
-  const ignore = listOption(parsed.values.ignore);
-  if (ignore.length) filters.ignore = ignore;
-  return { ...top, ...Object.keys(filters).length ? { filters } : {} };
-}
-async function runSearch(ctx, parsed, query) {
-  const cursor = stringOption(parsed.values.cursor);
-  let response;
-  try {
-    response = await ctx.api.post("/v1/search", {
-      ...query || !cursor ? { query } : {},
-      ...cursor ? { cursor } : {},
-      limit: intOption(parsed.values.limit, "limit", 1, 50),
-      ...await searchFilters(ctx, parsed)
-    });
-  } catch (error) {
-    if (!query && !cursor && error instanceof CliError && error.code === "invalid_request" && /query/i.test(error.message)) {
-      throw unsupportedError("browsing recent assets (an empty search)", 'Search with words instead, e.g. homebase search "newest images" --json.');
-    }
-    throw error;
-  }
-  if (ctx.json) printJson(ctx.io, searchJson(response));
-  else ctx.io.stdout(renderSearch(ctx.io, response, query || void 0) + "\n");
-}
-var search = {
-  spec: {
-    name: "search",
-    aliases: ["find"],
-    summary: "Ask the library a question in plain words. Shows how it was read, then grouped results. No words: newest first.",
-    usage: 'homebase search ["<question>"] [--limit <n>] [--cursor <c>] [--type <t>] [--bucket <id|name|none>] [--tag <t>] [--source human|agent] [--json]',
-    options: {
-      limit: { type: "string", value: "n", description: "Results per page, 1-50 (default 24)" },
-      cursor: { type: "string", value: "cursor", description: "nextCursor from the previous page (valid 10 minutes)" },
-      ...FILTER_OPTIONS,
-      ignore: { type: "string", multiple: true, value: "part", description: "Drop part of the interpretation: buckets, date, fileTypes, tags, source, sort, text" }
-    },
-    examples: [
-      'homebase search "latest files from the summer campaign"',
-      'homebase search "acme logo" --type image --json',
-      'homebase search "hero shots from last spring" --ignore date',
-      "homebase search --type image --tag hero      # no words: newest first"
-    ]
-  },
-  async run(ctx, parsed) {
-    await runSearch(ctx, parsed, parsed.positionals.join(" ").trim());
-  }
-};
-var recent = {
-  spec: {
-    name: "recent",
-    aliases: ["latest"],
-    summary: "Browse the newest assets (by latest version), optionally filtered. Same output as search.",
-    usage: "homebase recent [--type <t>] [--bucket <id|name|none>] [--tag <t>] [--source human|agent] [--limit <n>] [--cursor <c>] [--json]",
-    options: {
-      limit: { type: "string", value: "n", description: "Results per page, 1-50 (default 24)" },
-      cursor: { type: "string", value: "cursor", description: "nextCursor from the previous page (valid 10 minutes)" },
-      ...FILTER_OPTIONS
-    },
-    maxArgs: 0,
-    examples: ["homebase recent --json", "homebase recent --type image --source agent", 'homebase recent --bucket "Summer campaign 2026"']
-  },
-  async run(ctx, parsed) {
-    await runSearch(ctx, parsed, "");
-  }
-};
-var get = {
-  spec: {
-    name: "get",
-    aliases: ["show"],
-    summary: "Everything about one asset: buckets, dates, tags, AI description and visible text.",
-    usage: "homebase get <asset id> [--json]",
-    minArgs: 1,
-    maxArgs: 1
-  },
-  async run(ctx, parsed) {
-    const asset = await ctx.api.get(assetPath(parsed.positionals[0]));
-    if (ctx.json) printJson(ctx.io, asset);
-    else ctx.io.stdout(renderAsset(ctx.io, asset) + "\n");
-  }
-};
-var versions = {
-  spec: {
-    name: "versions",
-    summary: `An asset's version history, newest first (the newest version date is what "latest" means).`,
-    usage: "homebase versions <asset id> [--json]",
-    minArgs: 1,
-    maxArgs: 1
-  },
-  async run(ctx, parsed) {
-    const id = parsed.positionals[0];
-    let body;
-    try {
-      body = await ctx.api.get(`${assetPath(id)}/versions`);
-    } catch (error) {
-      if (isMissingRoute(error)) throw unsupportedError("version history", `\`homebase get ${id} --json\` shows the current version and versionsCount.`);
-      throw error;
-    }
-    const list = (body.versions ?? []).map((version) => ({
-      ...version,
-      ...typeof version.date === "number" ? { date: isoFromMs(version.date) } : {},
-      ...typeof version.uploadedAt === "number" ? { uploadedAt: isoFromMs(version.uploadedAt) } : {},
-      ...typeof version.createdAt === "number" ? { createdAt: isoFromMs(version.createdAt) } : {}
-    }));
-    if (ctx.json) {
-      printJson(ctx.io, { id: body.id ?? id, title: body.title, versions: list });
-      return;
-    }
-    const s = style(ctx.io);
-    ctx.io.stdout(
-      [
-        body.title ? s.bold(body.title) : id,
-        table([
-          [s.dim("VERSION"), s.dim("DATE"), s.dim("SIZE"), s.dim("NOTE")],
-          ...list.map((version) => [
-            `${version.version ?? "?"}${version.current ? " (current)" : ""}`,
-            shortDate(version.date ?? version.uploadedAt ?? version.createdAt),
-            formatBytes(version.size) || "-",
-            [version.note, version.addedBy].filter(Boolean).join(" \xB7 ")
-          ])
-        ])
-      ].join("\n") + "\n"
-    );
-  }
-};
-async function fetchToFile(ctx, url, path) {
-  const response = await ctx.fetch(url, { method: "GET" });
-  if (!response.ok || !response.body) throw new CliError(`Couldn't fetch the file (HTTP ${response.status}).`, { code: `http_${response.status}`, status: response.status });
-  const buffer = Buffer.from(await response.arrayBuffer());
-  writeFileSync2(path, buffer);
-  return { bytes: buffer.length, contentType: response.headers.get("content-type") ?? void 0 };
-}
-var view = {
-  spec: {
-    name: "view",
-    summary: "Save an asset's preview image to a local file and print its path, so you (or an agent) can look at it.",
-    usage: "homebase view <asset id> [-o <file>] [--original] [--json]",
-    options: {
-      output: { type: "string", short: "o", value: "file", description: "Where to save it (default: a temp file)" },
-      original: { type: "boolean", description: "Use the original image instead of the 1280x720 preview (images up to 20 MB)" }
-    },
-    minArgs: 1,
-    maxArgs: 1
-  },
-  async run(ctx, parsed) {
-    const id = parsed.positionals[0];
-    const asset = await ctx.api.get(assetPath(id));
-    let url = parsed.values.original ? void 0 : asset.thumbnailUrl;
-    let kind = "preview";
-    if (!url && asset.type === "image" && (asset.size ?? 0) <= 20 * 1024 * 1024) {
-      url = (await ctx.api.get(`${assetPath(id)}/download-url`)).url;
-      kind = "original";
-    }
-    if (!url) {
-      throw new CliError(
-        asset.indexing?.status === "pending" || asset.indexing?.status === "running" ? "The preview is still being drawn. Retry in a few seconds." : `\u201C${asset.title}\u201D (${asset.type}) has no preview image. Read its description with \`homebase get ${id}\`, or download it with \`homebase download ${id}\`.`,
-        { code: "no_preview", exitCode: EXIT.notFound }
-      );
-    }
-    const ext = kind === "preview" ? "jpg" : downloadFilename({ title: "x", mimeType: asset.mimeType }).split(".").pop() ?? "img";
-    const target = resolve2(ctx.cwd, stringOption(parsed.values.output) ?? join3(tmpdir(), "homebase-view", `${id}-${kind}.${ext}`));
-    mkdirSync2(resolve2(target, ".."), { recursive: true });
-    const saved = await fetchToFile(ctx, url, target);
-    const result = { id, title: asset.title, path: target, kind, bytes: saved.bytes, contentType: saved.contentType };
-    if (ctx.json) printJson(ctx.io, result);
-    else ctx.io.stdout(`${target}
-`);
-  }
-};
-var open = {
-  spec: {
-    name: "open",
-    summary: "Open an asset's file (a signed link, valid one hour) or link in the browser.",
-    usage: "homebase open <asset id> [--print] [--json]",
-    options: { print: { type: "boolean", description: "Print the URL instead of opening it" } },
-    minArgs: 1,
-    maxArgs: 1
-  },
-  async run(ctx, parsed) {
-    const link = await ctx.api.get(`${assetPath(parsed.positionals[0])}/download-url`);
-    const opened = parsed.values.print || ctx.json ? false : await ctx.openUrl(link.url);
-    if (ctx.json) printJson(ctx.io, { ...link, opened });
-    else ctx.io.stdout(opened ? `Opened ${link.kind === "signed" ? "a signed link (valid 1 hour)" : link.url}
-` : `${link.url}
-`);
-  }
-};
-async function downloadOne(ctx, id, dir, force, showProgress) {
-  const asset = await ctx.api.get(assetPath(id));
-  const link = await ctx.api.get(`${assetPath(id)}/download-url`);
-  if (link.kind === "link" && (asset.type === "link" || asset.type === "embed")) {
-    return { id, title: asset.title, skipped: "This asset is a link to a web page, not a file.", url: link.url };
-  }
-  const part = join3(dir, `.${id}.homebase-part`);
-  const partTag = `${part}.etag`;
-  let offset = 0;
-  let etag;
-  try {
-    offset = statSync3(part).size;
-    etag = readFileSync2(partTag, "utf8").trim() || void 0;
-  } catch {
-    etag = void 0;
-  }
-  if (!etag) offset = 0;
-  let response = await ctx.fetch(link.url, { method: "GET", headers: offset ? { Range: `bytes=${offset}-`, "If-Range": etag } : {} });
-  if (response.status === 416 || response.status === 206 && offset > 0 && response.headers.get("etag") !== null && response.headers.get("etag") !== etag) {
-    rmSync2(part, { force: true });
-    rmSync2(partTag, { force: true });
-    offset = 0;
-    response = await ctx.fetch(link.url, { method: "GET" });
-  }
-  const name = downloadFilename({ title: asset.title, mimeType: asset.mimeType, contentDisposition: response.headers.get("content-disposition"), url: link.url });
-  let target = join3(dir, name);
-  if (!force) target = uniquePath(target, (candidate) => existsSync2(candidate));
-  if (!response.ok || !response.body) {
-    throw new CliError(`Downloading \u201C${asset.title}\u201D failed (HTTP ${response.status}). The link may have expired; retry.`, { code: `http_${response.status}`, status: response.status });
-  }
-  const resumed = response.status === 206 && offset > 0;
-  if (!resumed) {
-    offset = 0;
-    const fresh = response.headers.get("etag");
-    if (fresh) writeFileSync2(partTag, fresh);
-    else rmSync2(partTag, { force: true });
-  }
-  const length = Number(response.headers.get("content-length")) || void 0;
-  const total = asset.size || (length !== void 0 ? offset + length : void 0);
-  const meter = progressMeter(ctx.io, showProgress, name, total);
-  await pipeline(
-    Readable.fromWeb(response.body),
-    countingStream((bytes2) => meter.update(offset + bytes2)),
-    createWriteStream(part, { flags: resumed ? "a" : "w" })
-  );
-  meter.finish();
-  const bytes = statSync3(part).size;
-  renameSync2(part, target);
-  rmSync2(partTag, { force: true });
-  return { id, title: asset.title, path: target, bytes, resumed };
-}
-var download = {
-  spec: {
-    name: "download",
-    summary: "Download files to disk with their real names and extensions (resumes partial downloads).",
-    usage: "homebase download <asset id\u2026> [-o <dir>] [--force] [--json]",
-    options: {
-      output: { type: "string", short: "o", value: "dir", description: "Folder to save into (default: current folder)" },
-      force: { type: "boolean", description: "Overwrite files with the same name instead of adding (2), (3)\u2026" }
-    },
-    minArgs: 1
-  },
-  async run(ctx, parsed) {
-    const dir = resolve2(ctx.cwd, stringOption(parsed.values.output) ?? ".");
-    mkdirSync2(dir, { recursive: true });
-    const downloaded = [];
-    const skipped = [];
-    const failed = [];
-    let firstError;
-    for (const id of parsed.positionals) {
-      try {
-        const result = await downloadOne(ctx, id, dir, Boolean(parsed.values.force), !ctx.json);
-        if ("skipped" in result) {
-          skipped.push({ id, reason: result.skipped, url: result.url });
-          if (!ctx.json) ctx.io.stderr(`Skipped ${result.title ?? id}: ${result.skipped} ${result.url ?? ""}
-`);
-        } else {
-          downloaded.push(result);
-          if (!ctx.json) ctx.io.stdout(`${result.path}  (${formatBytes(result.bytes)}${result.resumed ? ", resumed" : ""})
-`);
-        }
-      } catch (error) {
-        if (!(error instanceof CliError)) throw error;
-        firstError ??= error;
-        failed.push({ id, error: { code: error.code, message: error.message } });
-        if (!ctx.json) ctx.io.stderr(`${id}: ${error.message}
-`);
-        if (error.exitCode === EXIT.auth || error.exitCode === EXIT.limit) break;
-      }
-    }
-    if (ctx.json) printJson(ctx.io, { downloaded, skipped, failed });
-    if (firstError) throw Object.assign(firstError, { alreadyReported: true });
-  }
-};
-async function putFile(ctx, grant, path, size, showProgress) {
-  const meter = progressMeter(ctx.io, showProgress, basename2(path), size);
-  const body = Readable.toWeb(createReadStream(path).pipe(countingStream((bytes) => meter.update(bytes))));
-  let response;
-  try {
-    response = await ctx.fetch(grant.uploadUrl, {
-      method: "PUT",
-      headers: { ...grant.headers, "Content-Length": String(size) },
-      body,
-      duplex: "half"
-    });
-  } finally {
-    meter.finish();
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new CliError(`Uploading the bytes of ${basename2(path)} failed (HTTP ${response.status}). ${text.slice(0, 200)}`.trim(), {
-      code: `upload_put_${response.status}`,
-      status: response.status
-    });
-  }
-}
-function duplicateOf(value) {
-  const raw = value instanceof CliError ? value.server?.duplicate_of : value && typeof value === "object" ? value.duplicate_of : void 0;
-  if (!raw) return void 0;
-  if (typeof raw === "string") return { id: raw };
-  if (typeof raw === "object" && typeof raw.id === "string") {
-    const ref = raw;
-    return { id: ref.id, title: ref.title, type: ref.type, buckets: ref.buckets?.map((bucket) => ({ id: bucket.id, name: bucket.name })), appUrl: ref.appUrl, latestAt: ref.latestAt };
-  }
-  return void 0;
-}
-async function describeDuplicate(ctx, ref) {
-  if (ref.title) return ref;
-  try {
-    const asset = await ctx.api.get(assetPath(ref.id));
-    return { id: ref.id, title: asset.title, type: asset.type, buckets: (asset.buckets ?? []).map((bucket) => ({ id: bucket.id, name: bucket.name })), appUrl: asset.appUrl ?? asset.url, latestAt: asset.latestAt };
-  } catch {
-    return ref;
-  }
-}
-function duplicateText(ref) {
-  return `${ref.id}${ref.title ? `  \u201C${ref.title}\u201D` : ""}${ref.buckets?.length ? ` (in ${ref.buckets.map((bucket) => bucket.name).join(", ")})` : ""}`;
-}
-function duplicateHint(ref, opts) {
-  const reuse = [];
-  if (opts.tags.length) reuse.push(`homebase tag ${ref.id} --add ${opts.tags.join(",")}`);
-  for (const bucket of opts.buckets.filter((wanted) => !ref.buckets?.some((has) => has.id === wanted.id))) reuse.push(`homebase bucket add ${shellQuote(bucket.name ?? bucket.id)} ${ref.id}`);
-  return [
-    reuse.length ? `To reuse it: ${reuse.join(" && ")}.` : "",
-    `To add a second copy anyway: ${opts.retry} --allow-duplicate.`
-  ].filter(Boolean).join(" ");
-}
-async function bucketIdsFrom(ctx, value) {
-  const refs = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
-  const out = [];
-  for (const ref of refs) out.push(await resolveBucket(ctx.api, ref, { write: true }));
-  return out;
-}
-var upload = {
-  spec: {
-    name: "upload",
-    summary: "Upload files into the library (optionally tagged and into buckets). Marked as added by an agent/CLI.",
-    usage: "homebase upload <file|dir|glob\u2026> [--bucket <id|name>]\u2026 [--tag <t>]\u2026 [--title <t>] [--recursive] [--allow-duplicate] [--json]",
-    options: {
-      "allow-duplicate": { type: "boolean", description: "Upload even if the same file is already in the library" },
-      bucket: { type: "string", multiple: true, value: "id|name", description: "Also put it in this bucket (needs Manage buckets)" },
-      tag: { type: "string", multiple: true, value: "tag", description: "Tag it (repeat, or comma-separate)" },
-      title: { type: "string", value: "title", description: "Title (one file only; default: from the filename)" },
-      recursive: { type: "boolean", short: "r", description: "Upload folders' contents, including subfolders" }
-    },
-    minArgs: 1,
-    examples: ['homebase upload hero.png --tag summer,hero --bucket "Summer campaign 2026"', 'homebase upload ./exports --recursive --tag "q3 social"', 'homebase upload "renders/*.png"']
-  },
-  async run(ctx, parsed) {
-    const files = expandUploadArgs(parsed.positionals, { recursive: Boolean(parsed.values.recursive), cwd: ctx.cwd });
-    const title = stringOption(parsed.values.title);
-    if (title && files.length > 1) throw usageError("--title works with one file only.");
-    if (files.length > 500) throw usageError(`That's ${files.length} files; upload at most 500 per run.`);
-    const tags = listOption(parsed.values.tag);
-    const buckets2 = await bucketIdsFrom(ctx, parsed.values.bucket);
-    const allowDuplicate = Boolean(parsed.values["allow-duplicate"]);
-    const uploaded = [];
-    const duplicates = [];
-    const failed = [];
-    let stopError;
-    let firstError;
-    let tried = 0;
-    const s = style(ctx.io);
-    for (const file of files) {
-      tried++;
-      const size = statSync3(file).size;
-      const mimeType = mimeFor(file);
-      const shown = relative(ctx.cwd, file) || basename2(file);
-      const noteDuplicate = async (found) => {
-        const ref = await describeDuplicate(ctx, found);
-        const hint = duplicateHint(ref, { tags, buckets: buckets2, retry: `homebase upload ${shellQuote(shown)}` });
-        duplicates.push({ file: shown, duplicate_of: ref, hint });
-        if (!ctx.json) ctx.io.stdout(`${s.yellow("=")} ${shown} is already in the library as ${duplicateText(ref)}; not uploaded again.
-  ${hint}
-`);
+        ...!revoke.revoked && revokeAt ? { revoke_url: revokeAt } : {},
+        ...note ? { next_step: note } : {}
       };
-      try {
-        if (size === 0) throw new CliError(`${basename2(file)} is empty.`, { code: "empty_file" });
-        const grant = await ctx.api.post("/v1/uploads", {
-          filename: basename2(file),
-          contentType: mimeType,
-          size,
-          ...allowDuplicate ? { allowDuplicate: true } : {}
-        });
-        const early = duplicateOf(grant);
-        if (early && !grant.uploadUrl) {
-          await noteDuplicate(early);
-          continue;
-        }
-        await putFile(ctx, grant, file, size, !ctx.json);
-        const asset = await ctx.api.post("/v1/assets", {
-          key: grant.key,
-          mimeType: grant.headers["Content-Type"] ?? mimeType,
-          size,
-          ...title ? { title } : {},
-          ...tags.length ? { tags } : {},
-          ...buckets2.length ? { bucketIds: buckets2.map((bucket) => bucket.id) } : {},
-          ...allowDuplicate ? { allowDuplicate: true } : {}
-        });
-        const duplicate = duplicateOf(asset);
-        if (duplicate) {
-          await noteDuplicate(duplicate);
-          continue;
-        }
-        uploaded.push(assetSummaryJson(asset));
-        if (!ctx.json) ctx.io.stdout(`${s.green("\u2713")} ${basename2(file)} \u2192 ${asset.id}  ${asset.title}${asset.tags?.length ? `  ${asset.tags.map((tag2) => `#${tag2}`).join(" ")}` : ""}
-`);
-      } catch (error) {
-        if (!(error instanceof CliError)) throw error;
-        const duplicate = duplicateOf(error);
-        if (duplicate) {
-          await noteDuplicate(duplicate);
-          continue;
-        }
-        firstError ??= error;
-        failed.push({ file, error: { code: error.code, message: error.message } });
-        if (!ctx.json) ctx.io.stderr(`${s.red("\u2717")} ${basename2(file)}: ${error.message}
-`);
-        if (error.exitCode === EXIT.auth || error.exitCode === EXIT.limit) {
-          stopError = error;
-          break;
-        }
-      }
-    }
-    const notTried = stopError ? files.slice(tried) : [];
-    if (ctx.json) printJson(ctx.io, { uploaded, duplicates, failed, notTried });
-    else if (notTried.length) ctx.io.stderr(`Stopped; ${notTried.length} file(s) not tried.
-`);
-    if (!ctx.json && buckets2.length && uploaded.length) ctx.io.stdout(`In bucket${buckets2.length > 1 ? "s" : ""}: ${buckets2.map((bucket) => bucket.name ?? bucket.id).join(", ")}
-`);
-    const reported = stopError ?? firstError;
-    if (reported) throw Object.assign(reported, { alreadyReported: true });
-  }
-};
-function isMissingImportRoute(error) {
-  return error instanceof CliError && error.code === "not_found" && /There is no POST \/v1\/assets\/import/.test(error.message);
-}
-var importUrl = {
-  spec: {
-    name: "import",
-    summary: "Add something from the web: image/PDF/document URLs are fetched and stored like uploads; web pages (Figma, Drive, sites) become links.",
-    usage: "homebase import <url> [--title <t>] [--tag <t>]\u2026 [--bucket <id|name>]\u2026 [--link] [--allow-duplicate] [--json]",
-    options: {
-      "allow-duplicate": { type: "boolean", description: "Add it even if the same file or link is already in the library" },
-      title: { type: "string", value: "title", description: "Title (default: the file name or page title)" },
-      tag: { type: "string", multiple: true, value: "tag", description: "Tag it" },
-      bucket: { type: "string", multiple: true, value: "id|name", description: "Also put it in this bucket" },
-      link: { type: "boolean", description: "Save it as a link even if it's a file" }
-    },
-    minArgs: 1,
-    maxArgs: 1,
-    examples: ["homebase import https://example.com/press/logo.png --tag logo", 'homebase import https://www.figma.com/design/abc --title "Acme brand board"']
-  },
-  async run(ctx, parsed) {
-    const url = parsed.positionals[0];
-    if (!/^https?:\/\//i.test(url)) throw usageError("Give a full http(s) URL.");
-    const tags = listOption(parsed.values.tag);
-    const buckets2 = await bucketIdsFrom(ctx, parsed.values.bucket);
-    const title = stringOption(parsed.values.title);
-    const body = {
-      url,
-      ...title ? { title } : {},
-      ...tags.length ? { tags } : {},
-      ...buckets2.length ? { bucketIds: buckets2.map((bucket) => bucket.id) } : {},
-      ...parsed.values["allow-duplicate"] ? { allowDuplicate: true } : {}
     };
-    let asset;
-    try {
-      if (parsed.values.link) asset = await ctx.api.post("/v1/assets", body);
-      else {
-        try {
-          asset = await ctx.api.post("/v1/assets/import", body);
-        } catch (error) {
-          if (isMissingImportRoute(error)) asset = await ctx.api.post("/v1/assets", body);
-          else if (error instanceof CliError && error.code === "invalid_request" && /answered HTTP/.test(error.message)) {
-            throw new CliError(error.message, { ...error, exitCode: error.exitCode, hint: `To save the page as a link instead: homebase import ${url} --link` });
-          } else throw error;
-        }
-      }
-    } catch (error) {
-      const duplicate = duplicateOf(error);
-      if (!duplicate) throw error;
-      asset = { duplicate_of: duplicate };
-    }
-    const found = duplicateOf(asset);
-    if (found) {
-      const duplicate = await describeDuplicate(ctx, found);
-      const hint = duplicateHint(duplicate, { tags, buckets: buckets2, retry: `homebase import ${url}` });
-      if (ctx.json) printJson(ctx.io, { duplicate_of: duplicate, imported: false, hint });
-      else ctx.io.stdout(`Already in the library as ${duplicateText(duplicate)}; not added again.
-  ${hint}
-`);
-      return;
-    }
-    const importedAs = asset.type === "link" || asset.type === "embed" ? "link" : "file";
-    if (ctx.json) printJson(ctx.io, { ...assetSummaryJson(asset), importedAs });
-    else ctx.io.stdout(`Added ${importedAs === "file" ? `${asset.type} file` : "link"} ${asset.id}  ${asset.title}${asset.size ? ` (${formatBytes(asset.size)})` : ""}
-${asset.linkUrl ? `  ${asset.linkUrl}
-` : ""}`);
+    whoami = async (ctx) => {
+      const me = await ctx.api.get("/v1/me");
+      const session = ctx.auth instanceof ProfileAuth ? ctx.auth.current() : void 0;
+      const login2 = session ? canRefresh(session) ? { kind: "oauth", renews: true, access_expires_at: session.access_expires_at } : { kind: "legacy", renews: false } : { kind: ctx.tokenSource === "env" ? "env" : "none", renews: false };
+      return {
+        profile: ctx.tokenSource === "env" ? null : ctx.profile,
+        tokenSource: ctx.tokenSource,
+        api: ctx.apiUrl,
+        login: login2,
+        workspace: me.workspace,
+        user: me.user,
+        token: { name: me.token.name, scopes: me.token.scopes },
+        ...me.subscription ? { subscription: me.subscription } : {},
+        ...me.usage ? { usage: me.usage } : {},
+        ...me.rateLimit ? { rateLimit: me.rateLimit } : {}
+      };
+    };
+    profiles = async (ctx) => {
+      const config = ctx.store.readConfig();
+      return {
+        defaultProfile: config.defaultProfile ?? null,
+        profiles: Object.entries(config.profiles).map(([name, info]) => ({
+          name,
+          default: name === config.defaultProfile,
+          workspace: info.workspace,
+          api: info.api,
+          scopes: info.scopes ?? [],
+          storage: info.storage,
+          savedAt: info.savedAt
+        }))
+      };
+    };
+    profilesUse = async (ctx, parsed) => {
+      const name = parsed.positionals[0];
+      ctx.store.setDefault(name);
+      return { defaultProfile: name };
+    };
+    commands4 = { login, logout, whoami, profiles, "profiles use": profilesUse };
   }
-};
-var tag = {
-  spec: {
-    name: "tag",
-    summary: "Add or remove tags on assets. Tags are free-form; case and spacing don't matter.",
-    usage: "homebase tag <asset id\u2026> [--add <t>]\u2026 [--remove <t>]\u2026 [--json]",
-    options: {
-      add: { type: "string", multiple: true, value: "tag", description: "Tag to add (repeat, or comma-separate)" },
-      remove: { type: "string", multiple: true, value: "tag", description: "Tag to remove" }
-    },
-    minArgs: 1,
-    examples: ["homebase tag jx7abc\u2026 --add hero,final --remove draft"]
-  },
-  async run(ctx, parsed) {
-    const add = listOption(parsed.values.add);
-    const remove = listOption(parsed.values.remove);
-    if (!add.length && !remove.length) throw usageError("Say what to change: --add <tag> and/or --remove <tag>.");
-    const results = [];
-    for (const id of parsed.positionals) {
-      const result = await ctx.api.post(`${assetPath(id)}/tags`, {
-        ...add.length ? { add } : {},
-        ...remove.length ? { remove } : {}
-      });
-      results.push(result);
-      if (!ctx.json) ctx.io.stdout(`${id}  ${result.tags.length ? result.tags.map((t) => `#${t}`).join(" ") : "(no tags)"}
-`);
-    }
-    if (ctx.json) printJson(ctx.io, { results });
-  }
-};
-var rename = {
-  spec: {
-    name: "rename",
-    summary: "Rename an asset.",
-    usage: "homebase rename <asset id> <new title\u2026> [--json]",
-    minArgs: 2
-  },
-  async run(ctx, parsed) {
-    const [id, ...words] = parsed.positionals;
-    const title = words.join(" ").trim();
-    if (!title) throw usageError("Give the new title.");
-    const result = await ctx.api.patch(assetPath(id), { title });
-    if (ctx.json) printJson(ctx.io, result);
-    else ctx.io.stdout(`Renamed ${result.id} to \u201C${result.title}\u201D.
-`);
-  }
-};
-var libraryCommands = [search, recent, get, versions, view, open, download, upload, importUrl, tag, rename];
-
-// src/commands/setup.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
-import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { dirname, join as join4, resolve as resolve3 } from "node:path";
+});
 
 // src/connect.ts
-var CLIENTS = ["claude-code", "codex", "cursor", "claude-desktop", "claude-ai", "chatgpt"];
-var ALIASES = {
-  claude: "claude-code",
-  "claude-code": "claude-code",
-  claudecode: "claude-code",
-  codex: "codex",
-  cursor: "cursor",
-  "claude-desktop": "claude-desktop",
-  desktop: "claude-desktop",
-  "claude-ai": "claude-ai",
-  "claude.ai": "claude-ai",
-  claudeai: "claude-ai",
-  chatgpt: "chatgpt",
-  openai: "chatgpt"
-};
 function resolveClient(name) {
   return ALIASES[name.toLowerCase()];
 }
-var SERVER_NAME = "homebase";
 function claudeCodeArgs(url, scope = "user") {
   return ["mcp", "add", "--transport", "http", "--scope", scope, SERVER_NAME, url];
 }
@@ -3088,7 +3280,6 @@ function codexBlock(url, auth) {
 function tomlString(value) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
-var SECTION_HEADER = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/;
 function isHomebaseHeader(line) {
   const match = SECTION_HEADER.exec(line);
   if (!match) return false;
@@ -3182,652 +3373,385 @@ function clickPath(client, url) {
       ];
   }
 }
+var CLIENTS, ALIASES, SERVER_NAME, SECTION_HEADER;
+var init_connect = __esm({
+  "src/connect.ts"() {
+    "use strict";
+    CLIENTS = ["claude-code", "codex", "cursor", "claude-desktop", "claude-ai", "chatgpt"];
+    ALIASES = {
+      claude: "claude-code",
+      "claude-code": "claude-code",
+      claudecode: "claude-code",
+      codex: "codex",
+      cursor: "cursor",
+      "claude-desktop": "claude-desktop",
+      desktop: "claude-desktop",
+      "claude-ai": "claude-ai",
+      "claude.ai": "claude-ai",
+      claudeai: "claude-ai",
+      chatgpt: "chatgpt",
+      openai: "chatgpt"
+    };
+    SERVER_NAME = "homebase";
+    SECTION_HEADER = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/;
+  }
+});
 
 // src/commands/setup.ts
+var setup_exports = {};
+__export(setup_exports, {
+  CODEX_HEADLESS_NOTE: () => CODEX_HEADLESS_NOTE,
+  commands: () => commands5
+});
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { dirname, join as join6, resolve as resolve3 } from "node:path";
 function onPath2(command) {
   return spawnSync2(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" }).status === 0;
 }
-async function mayApply(ctx, yes, question) {
-  if (yes) return "yes";
-  if (ctx.json || !ctx.io.isTTY) return "needs-yes";
-  return await ctx.confirm(question) ? "yes" : "no";
-}
-async function connectClaudeCode(ctx, url, opts) {
+function connectClaudeCode(url, opts) {
   const command = claudeCodeCommand(url, opts.scope);
-  const pluginHint = "Or install the Homebase plugin (skill + MCP + /homebase commands): claude plugin marketplace add <path-to>/agent && claude plugin install homebase@homebase";
-  const after = "Then run /mcp inside Claude Code and choose homebase \u2192 Authenticate to approve the workspace in your browser. Over SSH or headless: `claude mcp login homebase --no-browser`, open the printed link anywhere, and paste the redirect URL back.";
+  const after = "Then the user runs /mcp inside Claude Code and chooses homebase \u2192 Authenticate to approve the workspace in the browser (over SSH or headless: `claude mcp login homebase --no-browser`, then paste the redirect URL back). The Homebase plugin bundles this plus the skill: claude plugin install homebase@homebase.";
   const hasClaude = onPath2("claude");
-  if (opts.print || !hasClaude) {
-    if (ctx.json) printJson(ctx.io, { client: "claude-code", url, command, ran: false, claude_found: hasClaude, next_step: `${hasClaude ? "" : "Install Claude Code, then run: "}${command}. ${after}` });
-    else ctx.io.stdout([hasClaude ? "Run:" : "Claude Code isn't on PATH. Once it is, run:", `  ${command}`, after, pluginHint].join("\n") + "\n");
-    return;
-  }
-  const decision = await mayApply(ctx, opts.yes, `Run \`${command}\`?`);
-  if (decision !== "yes") {
-    if (ctx.json) printJson(ctx.io, { client: "claude-code", url, command, ran: false, next_step: decision === "needs-yes" ? "Confirm with the user, then rerun with --yes (or let them run the command)." : "Cancelled." });
-    else ctx.io.stdout(decision === "no" ? "Cancelled.\n" : `Run:
-  ${command}
-`);
-    return;
+  if (!opts.write || !hasClaude) {
+    return {
+      client: "claude-code",
+      url,
+      applied: false,
+      command,
+      claude_found: hasClaude,
+      next_step: hasClaude ? `Show the user the command; only if they agree, rerun with --write (or they run it). ${after}` : `Install Claude Code, then run: ${command}. ${after}`
+    };
   }
   const result = spawnSync2("claude", claudeCodeArgs(url, opts.scope), { encoding: "utf8" });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
   const already = /already exists/i.test(output);
-  if (ctx.json) {
-    printJson(ctx.io, { client: "claude-code", url, command, ran: true, ok: result.status === 0 || already, alreadyConfigured: already, output, next_step: after });
-  } else {
-    ctx.io.stdout(`${output || "Added."}
-${already ? "(Homebase was already configured.)\n" : ""}${after}
-`);
-  }
-  if (result.status !== 0 && !already) throw Object.assign(new CliError(`claude mcp add failed: ${output}`, { code: "claude_failed" }), { alreadyReported: ctx.json });
+  if (result.status !== 0 && !already) throw new CliError(`claude mcp add failed: ${output}`, { code: "claude_failed", data: { client: "claude-code", url, command, applied: false } });
+  return { client: "claude-code", url, applied: !already, alreadyConfigured: already, command, next_step: after };
 }
-var CODEX_HEADLESS_NOTE = "For `codex exec` (approval policy never), Homebase write tools are refused unless approved in config: see the skill's references/setup.md (Codex, headless).";
-async function connectCodex(ctx, url, opts) {
-  const codexHome = ctx.env.CODEX_HOME || join4(homedir2(), ".codex");
-  const path = resolve3(ctx.cwd, opts.configPath ?? join4(codexHome, "config.toml"));
+function connectCodex(ctx, url, opts) {
+  const codexHome = ctx.env.CODEX_HOME || join6(homedir2(), ".codex");
+  const path = resolve3(ctx.cwd, opts.configPath ?? join6(codexHome, "config.toml"));
   const auth = opts.token ? { kind: "token-env", envVar: opts.tokenEnv } : { kind: "oauth" };
   const block = codexBlock(url, auth);
-  const before = existsSync3(path) ? readFileSync3(path, "utf8") : "";
+  const before = existsSync3(path) ? readFileSync5(path, "utf8") : "";
   const after = upsertCodexConfig(before, block);
   const diff = lineDiff(before, after, path);
-  const next = opts.token ? `Codex sends the bearer token from $${opts.tokenEnv}. Create a key in Homebase Settings \u2192 Agents with only the permissions it needs, and give it to Codex the way you handle other secrets (a secrets manager or CI secret). Don't put tokens in shell profiles or dotfiles. ${CODEX_HEADLESS_NOTE}` : `Now run \`codex mcp login homebase\` and approve the workspace and permissions in your browser. ${CODEX_HEADLESS_NOTE}`;
-  const base = { client: "codex", url, configPath: path, snippet: block, diff };
-  if (!diff) {
-    if (ctx.json) printJson(ctx.io, { ...base, applied: false, alreadyConfigured: true, next_step: next });
-    else ctx.io.stdout(`${path} already has this Homebase entry.
-${next}
-`);
-    return;
-  }
-  if (opts.print) {
-    if (ctx.json) printJson(ctx.io, { ...base, applied: false, next_step: `Add the snippet to ${path}. ${next}` });
-    else ctx.io.stdout(`Add to ${path}:
-
-${block}
-
-${next}
-`);
-    return;
-  }
-  if (!ctx.json) ctx.io.stderr(`${diff}
-
-`);
-  const decision = await mayApply(ctx, opts.yes, `Write this to ${path}?`);
-  if (decision !== "yes") {
-    if (ctx.json) printJson(ctx.io, { ...base, applied: false, next_step: decision === "needs-yes" ? "Show the diff to the user; only if they approve, rerun with --yes." : "Cancelled." });
-    else ctx.io.stdout(decision === "no" ? "Cancelled; nothing written.\n" : "Not written. Rerun with --yes to apply.\n");
-    return;
-  }
-  mkdirSync3(dirname(path), { recursive: true });
+  const next = opts.token ? `Codex sends the bearer token from $${opts.tokenEnv}. The user creates a key in Homebase Settings \u2192 Agents with only the permissions it needs and provides it from a secrets manager or CI secret, never a shell profile or dotfile. ${CODEX_HEADLESS_NOTE}` : `Then the user runs \`codex mcp login homebase\` and approves the workspace and permissions in the browser. ${CODEX_HEADLESS_NOTE}`;
+  const base = { client: "codex", url, configPath: path, snippet: block };
+  if (!diff) return { ...base, applied: false, alreadyConfigured: true, next_step: next };
+  if (!opts.write) return { ...base, applied: false, diff, next_step: `Show the user this diff; only if they agree, rerun with --write. ${next}` };
+  mkdirSync5(dirname(path), { recursive: true });
   let backup;
   if (before) {
     backup = `${path}.bak`;
     copyFileSync(path, backup);
   }
-  writeFileSync3(path, after);
-  if (ctx.json) printJson(ctx.io, { ...base, applied: true, backup, next_step: next });
-  else ctx.io.stdout(`Updated ${path}${backup ? ` (backup: ${backup})` : ""}.
-${next}
-`);
+  writeFileSync5(path, after);
+  return { ...base, applied: true, diff, ...backup ? { backup } : {}, next_step: next };
 }
-function connectCursor(ctx, url) {
-  const config = cursorConfig(url);
-  const deeplink = cursorDeeplink(url);
-  const next = "Open the deeplink (or add the JSON to ~/.cursor/mcp.json), then sign in from Cursor Settings \u2192 MCP (or `cursor-agent mcp login homebase`).";
-  if (ctx.json) {
-    printJson(ctx.io, { client: "cursor", url, configPath: "~/.cursor/mcp.json", config, deeplink, next_step: next });
-    return;
-  }
-  ctx.io.stdout([`One-click install:`, `  ${deeplink}`, "", `Or add to ~/.cursor/mcp.json (or .cursor/mcp.json in a project):`, JSON.stringify(config, null, 2), "", next].join("\n") + "\n");
+function connectCursor(url) {
+  return {
+    client: "cursor",
+    url,
+    applied: false,
+    configPath: "~/.cursor/mcp.json",
+    config: cursorConfig(url),
+    deeplink: cursorDeeplink(url),
+    next_step: "The user opens the deeplink (or adds the config to ~/.cursor/mcp.json), then signs in from Cursor Settings \u2192 MCP (or `cursor-agent mcp login homebase`)."
+  };
 }
-function connectClickPath(ctx, client, url) {
-  const steps = clickPath(client, url);
-  if (ctx.json) {
-    printJson(ctx.io, { client, url, steps });
-    return;
-  }
-  ctx.io.stdout([`MCP server URL: ${url}`, "", ...steps.map((step, index) => `${index + 1}. ${step}`)].join("\n") + "\n");
-}
-var connect = {
-  spec: {
-    name: "connect",
-    summary: "Connect an AI client to Homebase's MCP server: claude-code, codex, cursor, claude-desktop, claude-ai, chatgpt.",
-    usage: "homebase connect <client> [--yes] [--print] [--scope user|project|local] [--token [--token-env VAR]] [--json]",
-    options: {
-      yes: { type: "boolean", short: "y", description: "Apply without asking (only after the user agreed)" },
-      print: { type: "boolean", description: "Only print the setup; change nothing" },
-      scope: { type: "string", value: "scope", description: "claude-code: user (default), project or local" },
-      token: { type: "boolean", description: "codex: send a Settings key from an env var instead of signing in with OAuth" },
-      oauth: { type: "boolean", description: "codex: sign in through the browser (the default)" },
-      "token-env": { type: "string", value: "VAR", description: "codex --token: env var holding the key (default HOMEBASE_TOKEN)" },
-      config: { type: "string", value: "path", description: "codex: config.toml to edit (default $CODEX_HOME/config.toml)" }
-    },
-    maxArgs: 1,
-    examples: ["homebase connect claude-code", "homebase connect codex --print", "homebase connect chatgpt"]
-  },
-  async run(ctx, parsed) {
-    const name = parsed.positionals[0];
-    const url = mcpUrl(ctx.apiUrl);
-    if (!name) {
-      if (ctx.json) printJson(ctx.io, { url, clients: CLIENTS });
-      else ctx.io.stdout(`MCP server: ${url}
-Clients: ${CLIENTS.join(", ")}
-Run: homebase connect <client>
-`);
-      return;
-    }
-    const client = resolveClient(name);
-    if (!client) throw usageError(`Unknown client \u201C${name}\u201D. Choose one of: ${CLIENTS.join(", ")}.`);
-    const yes = Boolean(parsed.values.yes);
-    const print = Boolean(parsed.values.print);
-    switch (client) {
-      case "claude-code": {
-        const scope = stringOption(parsed.values.scope) ?? "user";
-        if (!["user", "project", "local"].includes(scope)) throw usageError("--scope must be user, project or local.");
-        return connectClaudeCode(ctx, url, { yes, print, scope });
-      }
-      case "codex": {
-        const tokenEnv = stringOption(parsed.values["token-env"]) ?? "HOMEBASE_TOKEN";
-        if (!/^[A-Z_][A-Z0-9_]*$/.test(tokenEnv)) throw usageError("--token-env must be an environment variable name like HOMEBASE_TOKEN.");
-        if (parsed.values.token && parsed.values.oauth) throw usageError("Use either --token or --oauth (the default).");
-        const token2 = Boolean(parsed.values.token) || Boolean(parsed.values["token-env"]);
-        return connectCodex(ctx, url, { yes, print, token: token2, tokenEnv, configPath: stringOption(parsed.values.config) });
-      }
-      case "cursor":
-        return connectCursor(ctx, url);
-      default:
-        return connectClickPath(ctx, client, url);
-    }
-  }
-};
 async function probe(ctx, url, init = {}) {
   try {
-    return await ctx.fetch(url, { ...init, headers: { "User-Agent": USER_AGENT, ...init.headers ?? {} }, signal: AbortSignal.timeout(15e3) });
+    const response = await ctx.fetch(url, { ...init, headers: { "User-Agent": USER_AGENT, ...init.headers }, signal: AbortSignal.timeout(15e3) });
+    await response.text().catch(() => "");
+    return response;
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
 }
-var doctor = {
-  spec: {
-    name: "doctor",
-    summary: "Check the API, your token and permissions, usage, and the MCP endpoint.",
-    usage: "homebase doctor [--json]",
-    maxArgs: 0
-  },
-  async run(ctx) {
-    const checks = [];
-    const major2 = Number(process.versions.node.split(".")[0]);
-    checks.push({ name: "node", status: major2 >= 20 ? "ok" : "fail", detail: `Node ${process.versions.node}${major2 >= 20 ? "" : " (needs 20 or newer)"}` });
-    const spec = await probe(ctx, `${ctx.apiUrl}/v1/openapi.json`);
-    if (spec instanceof Error) checks.push({ name: "api", status: "fail", detail: `Can't reach ${ctx.apiUrl}: ${spec.message}` });
-    else checks.push({ name: "api", status: spec.ok ? "ok" : "fail", detail: `${ctx.apiUrl} answered ${spec.status}` });
-    checks.push({
-      name: "credentials",
-      status: "ok",
-      detail: ctx.store.keychain ? `tokens are stored in ${ctx.store.keychain.name}` : `no OS keychain; tokens are stored in ${ctx.store.credentialsPath} (0600)`
-    });
-    if (!ctx.auth) {
-      checks.push({ name: "token", status: "fail", detail: "Not logged in. Run `homebase login` (or set HOMEBASE_TOKEN).", exitCode: EXIT.auth });
-    } else {
-      try {
-        const me = await ctx.api.get("/v1/me");
-        checks.push({ name: "token", status: "ok", detail: `\u201C${me.token.name}\u201D for ${me.workspace.name} (${me.user.email ?? me.user.name ?? "?"}, ${me.user.role ?? "?"}) from ${ctx.tokenSource === "env" ? "HOMEBASE_TOKEN" : `profile ${ctx.profile}`}` });
-        const missing = ALL_SCOPES.filter((scope) => !me.token.scopes.includes(scope));
-        checks.push({
-          name: "permissions",
-          status: missing.length ? "warn" : "ok",
-          detail: `has ${me.token.scopes.join(", ") || "none"}${missing.length ? `; lacks ${missing.join(", ")} (add them in Settings \u2192 Agents if needed)` : ""}`
-        });
-        if (me.subscription?.status && me.subscription.status !== "active") {
-          checks.push({ name: "subscription", status: "fail", detail: `subscription is ${me.subscription.status}`, exitCode: EXIT.limit });
+var CODEX_HEADLESS_NOTE, connect, doctor, commands5;
+var init_setup = __esm({
+  "src/commands/setup.ts"() {
+    "use strict";
+    init_args();
+    init_connect();
+    init_constants();
+    init_errors();
+    CODEX_HEADLESS_NOTE = "For `codex exec` (approval policy never), Homebase write tools are refused unless approved in config: see the skill's references/setup.md (Codex, headless).";
+    connect = async (ctx, parsed) => {
+      const name = parsed.positionals[0];
+      const url = mcpUrl(ctx.apiUrl);
+      if (!name) return { url, clients: [...CLIENTS], next_step: "homebase connect <client>" };
+      const client = resolveClient(name);
+      if (!client) throw usageError(`Unknown client \u201C${name}\u201D. Choose one of: ${CLIENTS.join(", ")}.`);
+      const write = Boolean(parsed.values.write);
+      switch (client) {
+        case "claude-code": {
+          const scope = stringOption(parsed.values.scope) ?? "user";
+          if (!["user", "project", "local"].includes(scope)) throw usageError("--scope must be user, project or local.");
+          return connectClaudeCode(url, { write, scope });
         }
-        const used = me.usage?.used ?? {};
-        const near = Object.entries(me.usage?.limits ?? {}).filter(([metric, limit]) => limit > 0 && (used[metric] ?? 0) / limit >= 0.9).map(([metric, limit]) => `${metric} ${used[metric]}/${limit}`);
-        checks.push({ name: "usage", status: near.length ? "warn" : "ok", detail: near.length ? `near the monthly limit: ${near.join(", ")} (resets ${me.usage?.resetsAt})` : `within limits (resets ${me.usage?.resetsAt})` });
-      } catch (error) {
-        if (!(error instanceof CliError)) throw error;
-        checks.push({ name: "token", status: "fail", detail: error.message, exitCode: error.exitCode });
+        case "codex": {
+          const tokenEnv = stringOption(parsed.values["token-env"]) ?? "HOMEBASE_TOKEN";
+          if (!/^[A-Z_][A-Z0-9_]*$/.test(tokenEnv)) throw usageError("--token-env must be an environment variable name like HOMEBASE_TOKEN.");
+          const token = Boolean(parsed.values.token) || Boolean(parsed.values["token-env"]);
+          return connectCodex(ctx, url, { write, token, tokenEnv, configPath: stringOption(parsed.values.config) });
+        }
+        case "cursor":
+          return connectCursor(url);
+        default:
+          return { client, url, applied: false, steps: clickPath(client, url), next_step: "The user follows steps in that app; nothing to run here." };
       }
-    }
-    const mcp = mcpUrl(ctx.apiUrl);
-    const mcpResponse = await probe(ctx, mcp, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "homebase-doctor", version: "1" } } })
-    });
-    if (mcpResponse instanceof Error) checks.push({ name: "mcp", status: "fail", detail: `Can't reach ${mcp}: ${mcpResponse.message}` });
-    else if (mcpResponse.status === 401 && mcpResponse.headers.get("www-authenticate")) {
-      checks.push({ name: "mcp", status: "ok", detail: `${mcp} is up and asks for OAuth (${mcpResponse.headers.get("www-authenticate").slice(0, 120)})` });
-    } else if (mcpResponse.ok) checks.push({ name: "mcp", status: "ok", detail: `${mcp} answered ${mcpResponse.status}` });
-    else if (mcpResponse.status === 404) checks.push({ name: "mcp", status: "warn", detail: `${mcp} isn't deployed yet (404). The CLI works without it.` });
-    else checks.push({ name: "mcp", status: "warn", detail: `${mcp} answered ${mcpResponse.status}` });
-    const failed = checks.find((check) => check.status === "fail");
-    if (ctx.json) printJson(ctx.io, { ok: !failed, api: ctx.apiUrl, mcp, checks: checks.map((check) => ({ name: check.name, status: check.status, detail: check.detail })) });
-    else {
-      const s = style(ctx.io);
-      const mark = { ok: s.green("\u2713"), warn: s.yellow("!"), fail: s.red("\u2717") };
-      ctx.io.stdout(checks.map((check) => `${mark[check.status]} ${check.name.padEnd(12)} ${check.detail}`).join("\n") + "\n");
-    }
-    if (failed) throw Object.assign(new CliError(failed.detail, { exitCode: failed.exitCode ?? EXIT.other, code: `doctor_${failed.name}` }), { alreadyReported: true });
+    };
+    doctor = async (ctx) => {
+      const checks = [];
+      const major2 = Number(process.versions.node.split(".")[0]);
+      checks.push({ name: "node", status: major2 >= 20 ? "ok" : "fail", detail: `Node ${process.versions.node}${major2 >= 20 ? "" : " (needs 20 or newer)"}` });
+      const spec = await probe(ctx, `${ctx.apiUrl}/v1/openapi.json`);
+      if (spec instanceof Error) checks.push({ name: "api", status: "fail", detail: `Can't reach ${ctx.apiUrl}: ${spec.message}` });
+      else checks.push({ name: "api", status: spec.ok ? "ok" : "fail", detail: `${ctx.apiUrl} answered ${spec.status}` });
+      checks.push({
+        name: "credentials",
+        status: "ok",
+        detail: ctx.store.keychain ? `tokens are stored in ${ctx.store.keychain.name}` : `no OS keychain; tokens are stored in ${ctx.store.credentialsPath} (0600)`
+      });
+      if (!ctx.auth) {
+        checks.push({ name: "token", status: "fail", detail: "Not logged in. Run `homebase login` (or set HOMEBASE_TOKEN).", exitCode: EXIT.auth });
+      } else {
+        try {
+          const me = await ctx.api.get("/v1/me");
+          checks.push({ name: "token", status: "ok", detail: `\u201C${me.token.name}\u201D for ${me.workspace.name} (${me.user.email ?? me.user.name ?? "?"}, ${me.user.role ?? "?"}) from ${ctx.tokenSource === "env" ? "HOMEBASE_TOKEN" : `profile ${ctx.profile}`}` });
+          const missing = ALL_SCOPES.filter((scope) => !me.token.scopes.includes(scope));
+          checks.push({
+            name: "permissions",
+            status: missing.length ? "warn" : "ok",
+            detail: `has ${me.token.scopes.join(", ") || "none"}${missing.length ? `; lacks ${missing.join(", ")} (add them in Settings \u2192 Agents if needed)` : ""}`
+          });
+          if (me.subscription?.status && me.subscription.status !== "active") {
+            checks.push({ name: "subscription", status: "fail", detail: `subscription is ${me.subscription.status}`, exitCode: EXIT.limit });
+          }
+          const used = me.usage?.used ?? {};
+          const near = Object.entries(me.usage?.limits ?? {}).filter(([metric, limit]) => limit > 0 && (used[metric] ?? 0) / limit >= 0.9).map(([metric, limit]) => `${metric} ${used[metric]}/${limit}`);
+          checks.push({ name: "usage", status: near.length ? "warn" : "ok", detail: near.length ? `near the monthly limit: ${near.join(", ")} (resets ${me.usage?.resetsAt})` : `within limits (resets ${me.usage?.resetsAt})` });
+        } catch (error) {
+          if (!(error instanceof CliError)) throw error;
+          checks.push({ name: "token", status: "fail", detail: error.message, exitCode: error.exitCode });
+        }
+      }
+      const mcp = mcpUrl(ctx.apiUrl);
+      const mcpResponse = await probe(ctx, mcp, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "homebase-doctor", version: "1" } } })
+      });
+      if (mcpResponse instanceof Error) checks.push({ name: "mcp", status: "fail", detail: `Can't reach ${mcp}: ${mcpResponse.message}` });
+      else if (mcpResponse.status === 401 && mcpResponse.headers.get("www-authenticate")) {
+        checks.push({ name: "mcp", status: "ok", detail: `${mcp} is up and asks for OAuth (${mcpResponse.headers.get("www-authenticate").slice(0, 120)})` });
+      } else if (mcpResponse.ok) checks.push({ name: "mcp", status: "ok", detail: `${mcp} answered ${mcpResponse.status}` });
+      else if (mcpResponse.status === 404) checks.push({ name: "mcp", status: "warn", detail: `${mcp} isn't deployed yet (404). The CLI works without it.` });
+      else checks.push({ name: "mcp", status: "warn", detail: `${mcp} answered ${mcpResponse.status}` });
+      const failed = checks.find((check) => check.status === "fail");
+      const data = { api: ctx.apiUrl, mcp, checks: checks.map((check) => ({ name: check.name, status: check.status, detail: check.detail })) };
+      if (failed) throw new CliError(failed.detail, { exitCode: failed.exitCode ?? EXIT.other, code: `doctor_${failed.name}`, data });
+      return data;
+    };
+    commands5 = { connect, doctor };
   }
-};
-var AGENT_ENV_MARKERS = [
-  "CI",
-  "GITHUB_ACTIONS",
-  "CLAUDECODE",
-  "CLAUDE_CODE_ENTRYPOINT",
-  "CODEX_SANDBOX",
-  "CODEX_THREAD_ID",
-  "CODEX_CI",
-  "CURSOR_AGENT",
-  "GEMINI_CLI",
-  "AI_AGENT"
-];
-function agentMarker(env) {
-  return AGENT_ENV_MARKERS.find((name) => {
-    const value = env[name];
-    return value !== void 0 && value !== "" && value !== "0" && value.toLowerCase() !== "false";
-  });
-}
-var token = {
-  spec: {
-    name: "token",
-    summary: "Print the current access token, only to a person at a terminal. A secret: never paste it into a chat, file or shell profile.",
-    usage: "homebase token [--profile <name>]",
-    options: { force: { type: "boolean", description: "Allow stdout to be a pipe, when a person at an interactive terminal runs it" } },
-    maxArgs: 0
-  },
-  async run(ctx, parsed) {
-    if (!ctx.auth) throw new CliError("Not logged in. Run `homebase login` first.", { exitCode: EXIT.auth, code: "not_logged_in" });
-    const refuse = (why) => new CliError(
-      `Refusing to print the token: ${why} Agents never need the raw token: the CLI uses the saved login. For CI or another program, create a key with only the permissions it needs in Settings \u2192 Agents and store it as a secret.`,
-      { exitCode: EXIT.usage, code: "token_refused" }
-    );
-    const marker = agentMarker(ctx.env);
-    if (marker) throw refuse(`this looks like an AI agent or CI session (${marker} is set).`);
-    if (!ctx.io.stdinTTY) throw refuse("there's no person at an interactive terminal.");
-    const toTerminal = ctx.io.stdoutTTY ?? ctx.io.isTTY;
-    if (!toTerminal && !parsed.values.force) throw refuse("stdout isn't a terminal, so it would land in a log, a pipe or an AI agent's context.");
-    const value = await ctx.auth.token();
-    ctx.io.stderr(
-      ctx.auth instanceof ProfileAuth && canRefresh(ctx.auth.current()) ? "This is a secret that works for about an hour: don't share it or paste it into chats.\n" : "This is a secret: don't share it or paste it into chats.\n"
-    );
-    ctx.io.stdout(value + "\n");
-  }
-};
-var setupCommands = [connect, doctor, token];
+});
 
-// src/commands/trash.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
-
-// src/capabilities.ts
-var cache = /* @__PURE__ */ new WeakMap();
-function openApi(ctx) {
-  let pending = cache.get(ctx);
-  if (!pending) {
-    pending = ctx.api.request("GET", "/v1/openapi.json", { auth: false }).catch(() => void 0);
-    cache.set(ctx, pending);
-  }
-  return pending;
-}
-function operationText(spec, path, method) {
-  const op = spec.paths?.[path]?.[method];
-  if (!op) return void 0;
-  const schemas = spec.components?.schemas ?? {};
-  const seen = /* @__PURE__ */ new Set();
-  const parts = [];
-  const visit = (value) => {
-    const text = JSON.stringify(value) ?? "";
-    parts.push(text);
-    for (const [, name] of text.matchAll(/"#\/components\/schemas\/([^"]+)"/g)) {
-      if (seen.has(name)) continue;
-      seen.add(name);
-      visit(schemas[name]);
-    }
-  };
-  visit(op);
-  return parts.join("\n");
-}
-async function hasDeletePreview(ctx) {
-  const spec = await openApi(ctx);
-  if (!spec) return false;
-  return /confirm_token/.test(operationText(spec, "/v1/assets/delete", "post") ?? "");
-}
-
-// src/commands/trash.ts
-var LOCAL_TTL_S = 600;
-var RESTORABLE = "30 days, by a workspace owner or admin (homebase restore <id\u2026>, or Library \u2192 Recently deleted)";
-function pendingPath(ctx) {
-  return join5(ctx.store.dir, "pending-delete.json");
-}
-function readLocal(ctx) {
+// src/context.ts
+var context_exports = {};
+__export(context_exports, {
+  createCtx: () => createCtx,
+  normalizeApiUrl: () => normalizeApiUrl,
+  openInBrowser: () => openInBrowser
+});
+import { spawn } from "node:child_process";
+function openInBrowser(url) {
   try {
-    const data = JSON.parse(readFileSync4(pendingPath(ctx), "utf8"));
-    return data && typeof data === "object" ? data : {};
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return Promise.resolve(false);
   } catch {
-    return {};
+    return Promise.resolve(false);
   }
+  const [command, args] = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["rundll32.exe", ["url.dll,FileProtocolHandler", url]] : ["xdg-open", [url]];
+  return new Promise((resolve4) => {
+    try {
+      const child = spawn(command, args, { stdio: "ignore", detached: true });
+      child.on("error", () => resolve4(false));
+      child.on("spawn", () => {
+        child.unref();
+        resolve4(true);
+      });
+    } catch {
+      resolve4(false);
+    }
+  });
 }
-function writeLocal(ctx, data) {
-  mkdirSync4(ctx.store.dir, { recursive: true, mode: 448 });
-  const now = Date.now();
-  const fresh = Object.fromEntries(Object.entries(data).filter(([, entry]) => entry.expiresAt > now));
-  writeFileSync4(pendingPath(ctx), JSON.stringify(fresh, null, 2), { mode: 384 });
+function normalizeApiUrl(raw, source = "--api") {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw usageError(`${source} must be a full URL like ${DEFAULT_API_URL}.`);
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOST.test(url.hostname))) {
+    throw usageError(`${source} must use https (plain http only for localhost, 127.0.0.1 or [::1]).`);
+  }
+  if (url.username || url.password) throw usageError(`${source} can't contain a user name or password.`);
+  return url.toString().replace(/\/+$/, "");
 }
-var sameIds = (a, b) => [...a].sort().join(",") === [...b].sort().join(",");
-function normalizePreview(body, source) {
-  const assets = (body.assets ?? []).map((asset) => ({
-    id: asset.id,
-    title: asset.title,
-    type: asset.type,
-    buckets: (asset.buckets ?? []).map((bucket) => ({ ...bucket }))
-  }));
+function originOf(url) {
+  return new URL(url).origin;
+}
+function resolveCredential(args) {
+  const { env, store, config, apiUrl } = args;
+  const target = originOf(apiUrl);
+  const envToken = env.HOMEBASE_TOKEN?.trim();
+  if (envToken) {
+    const home = args.envApi ?? config.profiles[args.profile]?.api ?? DEFAULT_API_URL;
+    if (originOf(home) === target) return { auth: new EnvAuth(envToken, apiUrl), tokenSource: "env", profile: args.profile };
+    return {
+      tokenSource: "none",
+      profile: args.profile,
+      noAuth: () => usageError(
+        `HOMEBASE_TOKEN is for ${originOf(home)}, so it isn't sent to ${target} (from ${args.apiSource === "flag" ? "--api" : "HOMEBASE_API_URL"}). Homebase never sends a token to a server it wasn't issued for.`,
+        `To use a token with ${target}, set HOMEBASE_API_URL=${target} alongside HOMEBASE_TOKEN, or run \`homebase login --api ${target}\`.`
+      )
+    };
+  }
+  const candidates = args.profileExplicit ? [args.profile] : [args.profile, ...Object.keys(config.profiles).filter((name) => name !== args.profile)];
+  for (const name of candidates) {
+    const info = config.profiles[name];
+    if (!info || originOf(info.api) !== target) continue;
+    const stored = store.session(name);
+    if (!stored || originOf(stored.session.api) !== target) continue;
+    const auth = new ProfileAuth({ store, profile: name, session: stored.session, fetch: args.fetch, sleep: args.sleep, notice: args.notice });
+    return { auth, tokenSource: stored.storage, profile: name };
+  }
+  const saved = config.profiles[args.profile];
+  if (saved && originOf(saved.api) !== target) {
+    const via = args.apiSource === "flag" ? "--api" : "HOMEBASE_API_URL";
+    return {
+      tokenSource: "none",
+      profile: args.profile,
+      noAuth: () => usageError(
+        `Your saved login (profile ${args.profile}) is for ${originOf(saved.api)}, not ${target} (from ${via}). Homebase never sends a saved login to another server.`,
+        `To use ${target}, run \`homebase login --api ${target} --profile <name>\`, or set HOMEBASE_TOKEN for it.`
+      )
+    };
+  }
+  return { tokenSource: "none", profile: args.profile };
+}
+function createCtx(parsed, overrides = {}) {
+  const io = overrides.io ?? processIo();
+  const env = overrides.env ?? process.env;
+  const store = overrides.store ?? new CredentialStore({ dir: void 0, env });
+  const pretty = Boolean(parsed.values.pretty);
+  const view2 = { full: Boolean(parsed.values.full), thumbnails: Boolean(parsed.values["with-thumbnails"]) };
+  const config = store.readConfig();
+  const namedProfile = stringOption(parsed.values.profile) ?? env.HOMEBASE_PROFILE;
+  const profile = validateProfileName(namedProfile ?? config.defaultProfile ?? "default");
+  const profileInfo = config.profiles[profile];
+  const flagApi = stringOption(parsed.values.api);
+  const envApi = env.HOMEBASE_API_URL?.trim() || void 0;
+  const apiSource = flagApi ? "flag" : envApi ? "env" : profileInfo ? "profile" : "default";
+  const apiUrl = flagApi ? normalizeApiUrl(flagApi, "--api") : envApi ? normalizeApiUrl(envApi, "HOMEBASE_API_URL") : normalizeApiUrl(profileInfo?.api ?? DEFAULT_API_URL);
+  const fetchImpl = overrides.fetch ?? nodeFetch;
+  const sleep = overrides.sleep ?? realSleep;
+  const notices = /* @__PURE__ */ new Set();
+  const notice = (code2, message) => {
+    if (notices.has(code2)) return;
+    notices.add(code2);
+    io.stderr(JSON.stringify({ notice: code2, message }) + "\n");
+  };
+  const usual = profileInfo?.api ?? DEFAULT_API_URL;
+  if ((apiSource === "flag" || apiSource === "env") && originOf(apiUrl) !== originOf(usual)) {
+    notice("api_override", `Using the Homebase API at ${originOf(apiUrl)} (from ${apiSource === "flag" ? "--api" : "HOMEBASE_API_URL"}), not ${originOf(usual)}.`);
+  }
+  const credential = resolveCredential({
+    env,
+    store,
+    config,
+    profile,
+    profileExplicit: namedProfile !== void 0,
+    apiUrl,
+    apiSource,
+    flagApi,
+    envApi: envApi ? normalizeApiUrl(envApi, "HOMEBASE_API_URL") : void 0,
+    fetch: fetchImpl,
+    sleep,
+    notice
+  });
+  const api = new Api({
+    baseUrl: apiUrl,
+    auth: credential.auth,
+    noAuth: credential.noAuth,
+    fetch: fetchImpl,
+    sleep,
+    onWait: (seconds, message) => notice("rate_limit_wait", `${message} Waiting ${seconds}s, then retrying.`)
+  });
   return {
-    preview: true,
-    assets,
-    notFound: body.notFound ?? [],
-    confirm_token: String(body.confirm_token ?? ""),
-    expires_in: Number(body.expires_in ?? LOCAL_TTL_S),
-    source
+    io,
+    view: view2,
+    pretty,
+    emit: (data) => io.stdout(formatJson(okJson(data), pretty)),
+    notice,
+    env,
+    apiUrl,
+    apiSource,
+    apiExplicit: apiSource === "flag" || apiSource === "env",
+    profile: credential.profile,
+    profileExplicit: namedProfile !== void 0,
+    profileInfo: config.profiles[credential.profile],
+    store,
+    auth: credential.auth,
+    tokenSource: credential.tokenSource,
+    fetch: fetchImpl,
+    sleep,
+    api,
+    openUrl: overrides.openUrl ?? openInBrowser,
+    cwd: overrides.cwd ?? process.cwd()
   };
 }
-async function localPreview(ctx, ids) {
-  const assets = [];
-  const notFound = [];
-  for (const id of ids) {
-    try {
-      const asset = await ctx.api.get(`/v1/assets/${encodeURIComponent(id)}`);
-      assets.push({
-        id: asset.id,
-        title: asset.title,
-        type: asset.type,
-        // This server doesn't say whether a client link is live; a share page exists for every bucket that has a shareUrl.
-        buckets: (asset.buckets ?? []).map((bucket) => ({ id: bucket.id, name: bucket.name, shareUrl: bucket.shareUrl }))
-      });
-    } catch (error) {
-      if (error instanceof CliError && error.exitCode === EXIT.notFound) notFound.push(id);
-      else throw error;
-    }
+var LOOPBACK_HOST;
+var init_context = __esm({
+  "src/context.ts"() {
+    "use strict";
+    init_api();
+    init_constants();
+    init_credentials();
+    init_errors();
+    init_http();
+    init_session();
+    init_output();
+    init_args();
+    LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])$/;
   }
-  const token2 = `local_${randomBytes2(12).toString("hex")}`;
-  if (assets.length) writeLocal(ctx, { ...readLocal(ctx), [token2]: { ids: assets.map((asset) => asset.id), api: ctx.apiUrl, expiresAt: Date.now() + LOCAL_TTL_S * 1e3 } });
-  return { preview: true, assets, notFound, confirm_token: assets.length ? token2 : "", expires_in: LOCAL_TTL_S, source: "local" };
-}
-function bucketNote(bucket) {
-  const name = stripControl(bucket.name);
-  if (bucket.clientLinkLive) return `\u201C${name}\u201D: client link is LIVE${bucket.clientOpened ? ", and the client has opened it" : ""}`;
-  if (bucket.clientLinkLive === false) return `\u201C${name}\u201D (client link off)`;
-  return `\u201C${name}\u201D${bucket.shareUrl ? " (has a client share page)" : ""}`;
-}
-function renderPreview(ctx, preview) {
-  const s = style(ctx.io);
-  const n = preview.assets.length;
-  const lines = [`This would move ${n} asset${n === 1 ? "" : "s"} to Recently deleted, removing ${n === 1 ? "it" : "them"} from every bucket and client share page:`];
-  preview.assets.forEach((asset, index) => {
-    lines.push(`  ${index + 1}. ${s.bold(stripControl(asset.title))}  (${stripControl(asset.id)}, ${stripControl(asset.type)})`);
-    lines.push(asset.buckets.length ? `     in ${asset.buckets.map(bucketNote).join("; ")}` : "     in no bucket (library only)");
-  });
-  if (preview.notFound.length) lines.push(`Not found (already gone or wrong id): ${preview.notFound.map(stripControl).join(", ")}`);
-  const live = preview.assets.filter((asset) => asset.buckets.some((bucket) => bucket.clientLinkLive));
-  if (live.length) lines.push(s.yellow(`Warning: ${live.length} of these ${live.length === 1 ? "is" : "are"} on a live client link. The client will stop seeing ${live.length === 1 ? "it" : "them"}.`));
-  lines.push(`An owner or admin can restore them for 30 days.`);
-  return lines.join("\n");
-}
-async function confirmDelete(ctx, ids, token2, source) {
-  if (source === "local") {
-    const pending = readLocal(ctx);
-    const entry = pending[token2];
-    if (!entry || entry.expiresAt < Date.now() || entry.api !== ctx.apiUrl) {
-      throw new CliError("That confirm token is unknown or expired. Run `homebase delete <ids\u2026>` again to preview, and show the user the list.", { exitCode: EXIT.confirm, code: "confirm_token_invalid" });
-    }
-    if (!sameIds(entry.ids, ids)) {
-      throw new CliError("The ids don't match the preview this token was issued for. Preview exactly the assets the user approved.", { exitCode: EXIT.confirm, code: "confirm_token_mismatch" });
-    }
-    delete pending[token2];
-    writeLocal(ctx, pending);
-    const body2 = await ctx.api.post("/v1/assets/delete", { ids });
-    if (body2.preview === true) return normalizePreview(body2, "server");
-    return body2;
-  }
-  let body;
-  try {
-    body = await ctx.api.post("/v1/assets/delete", { ids, confirm_token: token2 });
-  } catch (error) {
-    if (error instanceof CliError && error.exitCode !== EXIT.auth && error.exitCode !== EXIT.limit && /confirm/i.test(`${error.code} ${error.message}`)) {
-      const said = /nothing was deleted/i.test(error.message);
-      throw new CliError(`${error.message}${said ? "" : " Nothing was deleted. Run the preview again and show the user the list before confirming."}`, {
-        exitCode: EXIT.confirm,
-        code: "confirm_token_invalid",
-        status: error.status
-      });
-    }
-    throw error;
-  }
-  if (body.preview === true) return normalizePreview(body, "server");
-  return body;
-}
-var isPreview = (result) => result.preview === true;
-function printDeleted(ctx, result) {
-  if (ctx.json) {
-    printJson(ctx.io, { deleted: result.deleted ?? [], notFound: result.notFound ?? [], restorable: RESTORABLE });
-    return;
-  }
-  ctx.io.stdout(`Moved ${result.deleted?.length ?? 0} to Recently deleted (restorable for 30 days by an owner or admin: homebase restore <id\u2026>).
-`);
-  if (result.notFound?.length) ctx.io.stderr(`Not found: ${result.notFound.join(", ")}
-`);
-}
-function needsConfirmation(ctx, ids, preview) {
-  const rerun = `homebase delete ${ids.join(" ")} --confirm-token ${preview.confirm_token}`;
-  const nextStep = `Show the user exactly this list (titles, buckets, client-link warnings) and ask whether to delete these. Only after they say yes in a new message, run: ${rerun} --json. Never run it in the same turn as this preview. The token expires in ${Math.round(preview.expires_in / 60)} minutes.`;
-  if (ctx.json) {
-    printJson(ctx.io, { confirmation_required: true, ...preview, next_step: nextStep, exit_code: EXIT.confirm });
-  } else {
-    ctx.io.stderr(`${renderPreview(ctx, preview)}
-`);
-  }
-  throw Object.assign(
-    new CliError(`Confirmation required: show the user this list and, only after they say yes, rerun with --confirm-token ${preview.confirm_token}. Nothing was deleted.`, {
-      exitCode: EXIT.confirm,
-      code: "confirmation_required"
-    }),
-    { alreadyReported: ctx.json }
-  );
-}
-var del = {
-  spec: {
-    name: "delete",
-    summary: "Move assets to Recently deleted (restorable 30 days). Always previews first; deleting needs the user's yes.",
-    usage: "homebase delete <asset id\u2026> [--yes] [--confirm-token <t>] [--json]",
-    options: {
-      yes: { type: "boolean", short: "y", description: "At a terminal: skip the y/N prompt (the preview is still printed)" },
-      "confirm-token": { type: "string", value: "token", description: "From a previous preview the user approved; deletes those ids" }
-    },
-    minArgs: 1,
-    examples: [
-      "homebase delete jx7abc\u2026            # preview, then y/N",
-      "homebase delete jx7abc\u2026 --json     # agents: preview + confirm_token, exit 6",
-      "homebase delete jx7abc\u2026 --confirm-token <t> --json   # only after the user said yes"
-    ]
-  },
-  async run(ctx, parsed) {
-    const ids = parsed.positionals;
-    if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
-    for (const id of ids) if (!looksLikeId(id)) throw usageError(`\u201C${id}\u201D isn't an asset id. Find ids with \`homebase search\`.`);
-    const twoStep = await hasDeletePreview(ctx);
-    const token2 = stringOption(parsed.values["confirm-token"]);
-    if (token2) {
-      const source = token2.startsWith("local_") ? "local" : "server";
-      if (source === "server" && !twoStep) throw usageError("This server doesn't issue confirm tokens; that token isn't from `homebase delete`. Run the preview again.");
-      const result2 = await confirmDelete(ctx, ids, token2, source);
-      if (isPreview(result2)) return needsConfirmation(ctx, ids, result2);
-      return printDeleted(ctx, result2);
-    }
-    let preview;
-    if (twoStep) {
-      const body = await ctx.api.post("/v1/assets/delete", { ids });
-      if (body.preview !== true) {
-        return printDeleted(ctx, body);
-      }
-      preview = normalizePreview(body, "server");
-    } else {
-      preview = await localPreview(ctx, ids);
-    }
-    if (!preview.assets.length) {
-      if (ctx.json) printJson(ctx.io, { deleted: [], notFound: preview.notFound, restorable: RESTORABLE });
-      else ctx.io.stderr(`Nothing to delete. Not found: ${preview.notFound.join(", ")}
-`);
-      return;
-    }
-    if (!interactive(ctx.io)) return needsConfirmation(ctx, ids, preview);
-    ctx.io.stderr(`${renderPreview(ctx, preview)}
-`);
-    const yes = Boolean(parsed.values.yes) || await ctx.confirm(`Delete ${preview.assets.length === 1 ? "it" : `these ${preview.assets.length}`}?`);
-    if (!yes) {
-      if (ctx.json) printJson(ctx.io, { deleted: [], notFound: preview.notFound, cancelled: true });
-      else ctx.io.stderr("Nothing deleted.\n");
-      return;
-    }
-    const finalIds = preview.assets.map((asset) => asset.id);
-    const result = await confirmDelete(ctx, finalIds, preview.confirm_token, preview.source);
-    if (isPreview(result)) return needsConfirmation(ctx, finalIds, result);
-    printDeleted(ctx, result);
-  }
-};
-var iso = (value) => typeof value === "number" ? isoFromMs(value) : value;
-var deleted = {
-  spec: {
-    name: "deleted",
-    summary: "List Recently deleted assets (restorable for 30 days by an owner or admin).",
-    usage: "homebase deleted [--limit <n>] [--cursor <c>] [--json]",
-    options: {
-      limit: { type: "string", value: "n", description: "Per page, 1-100 (default 50)" },
-      cursor: { type: "string", value: "cursor", description: "nextCursor from the previous page" }
-    },
-    maxArgs: 0
-  },
-  async run(ctx, parsed) {
-    let page;
-    try {
-      page = await ctx.api.get("/v1/assets/deleted", { limit: intOption(parsed.values.limit, "limit", 1, 100), cursor: stringOption(parsed.values.cursor) });
-    } catch (error) {
-      if (isMissingRoute(error, /No asset with id deleted/)) throw unsupportedError("listing Recently deleted", "Owners and admins can see it in the web app: Library \u2192 Recently deleted.");
-      throw error;
-    }
-    const assets = (page.assets ?? page.items ?? []).map((asset) => ({ ...asset, deletedAt: iso(asset.deletedAt), purgeAt: iso(asset.purgeAt) }));
-    if (ctx.json) {
-      printJson(ctx.io, { assets, nextCursor: page.nextCursor ?? null });
-      return;
-    }
-    if (!assets.length) {
-      ctx.io.stdout("Recently deleted is empty.\n");
-      return;
-    }
-    const s = style(ctx.io);
-    ctx.io.stdout(
-      table([
-        [s.dim("ID"), s.dim("TYPE"), s.dim("DELETED"), s.dim("PURGED"), s.dim("TITLE")],
-        ...assets.map((asset) => [s.cyan(asset.id), asset.type, shortDate(asset.deletedAt), shortDate(asset.purgeAt), asset.title])
-      ]) + `
-${page.nextCursor ? s.dim(`More: homebase deleted --cursor ${page.nextCursor}
-`) : ""}`
-    );
-  }
-};
-var restore = {
-  spec: {
-    name: "restore",
-    summary: "Bring assets back from Recently deleted, into the buckets they were in (owner or admin).",
-    usage: "homebase restore <asset id\u2026> [--json]",
-    minArgs: 1
-  },
-  async run(ctx, parsed) {
-    const ids = parsed.positionals;
-    if (ids.length > 50) throw usageError("At most 50 assets per call. Split the list.");
-    for (const id of ids) if (!looksLikeId(id)) throw usageError(`\u201C${id}\u201D isn't an asset id. List them with \`homebase deleted\`.`);
-    let result;
-    try {
-      result = await ctx.api.post("/v1/assets/restore", { ids });
-    } catch (error) {
-      if (isMissingRoute(error)) throw unsupportedError("restoring assets", "Owners and admins can restore them in the web app: Library \u2192 Recently deleted.");
-      throw error;
-    }
-    if (ctx.json) {
-      printJson(ctx.io, { restored: result.restored ?? [], notFound: result.notFound ?? [] });
-      return;
-    }
-    ctx.io.stdout(`Restored ${result.restored?.length ?? 0} asset${result.restored?.length === 1 ? "" : "s"}.
-`);
-    if (result.notFound?.length) ctx.io.stderr(`Not in Recently deleted: ${result.notFound.join(", ")}
-`);
-  }
-};
-var trashCommands = [del, deleted, restore];
+});
 
 // src/main.ts
-var COMMANDS = [...authCommands, ...libraryCommands, ...bucketCommands, ...trashCommands, ...setupCommands];
-var SECTIONS = [
-  ["Find", ["search", "recent", "get", "versions", "view", "open", "download", "buckets", "bucket ls", "share-link"]],
-  ["Add & organise", ["upload", "import", "tag", "rename", "bucket create", "bucket add", "bucket remove"]],
-  ["Delete & restore", ["delete", "deleted", "restore"]],
-  ["Account & setup", ["login", "logout", "whoami", "profiles", "profiles use", "connect", "doctor", "token"]]
-];
-function topHelp() {
-  const byName = new Map(COMMANDS.map((command) => [command.spec.name, command.spec]));
-  const lines = [
-    `homebase ${CLI_VERSION} \u2014 your team's asset library, from the terminal and for AI agents.`,
-    "",
-    "Usage: homebase <command> [options]      (add --json to any command for machine output)"
-  ];
-  for (const [title, names] of SECTIONS) {
-    lines.push("", `${title}:`);
-    for (const name of names) {
-      const spec = byName.get(name);
-      if (spec) lines.push(`  ${name.padEnd(15)} ${spec.summary}`);
-    }
-  }
-  lines.push(
-    "",
-    "Global options: --json, --api <url>, --profile <name>, -h/--help, --version",
-    "Environment:    HOMEBASE_TOKEN, HOMEBASE_API_URL, HOMEBASE_PROFILE, HOMEBASE_CONFIG_DIR, HOMEBASE_NO_KEYCHAIN=1",
-    "Login:          homebase login signs in through your browser (one click if you're signed in there); over SSH or",
-    "                headless it uses --device. Logins renew themselves and are only sent to the API they came from.",
-    "Exit codes:     0 ok \xB7 1 error \xB7 2 usage \xB7 3 auth/permission \xB7 4 limit reached (don't retry) \xB7 5 not found \xB7 6 needs the user's confirmation",
-    "",
-    'Start with: homebase login, then homebase search "latest logo files".'
-  );
-  return lines.join("\n");
-}
-function groupHelp(group) {
-  const subs = COMMANDS.filter((command) => command.spec.name.startsWith(`${group} `)).map((command) => command.spec);
-  return [`homebase ${group} <command>`, "", ...subs.map((spec) => `  ${spec.name.padEnd(15)} ${spec.summary}`)].join("\n");
-}
-function reportError(io, json, error) {
-  const stop = doNotRetryLine(error);
-  if (stop) io.stderr(`${stop}
-`);
-  if (json) {
-    printJson(io, errorJson(error));
-    return;
-  }
-  const s = style({ ...io, color: io.color && io.isTTY });
-  const lines = [`${s.red("Error:")} ${error.message}`];
-  const server = error.server;
-  if (server?.upgrade_url && !stop) lines.push(`Upgrade: ${server.upgrade_url}`);
-  if (server?.missing_scopes?.length) lines.push(`Missing permissions: ${server.missing_scopes.join(", ")}`);
-  if (error.hint) lines.push(error.hint);
-  io.stderr(lines.join("\n") + "\n");
-}
+init_args();
+init_constants();
+init_errors();
+init_output();
+init_specs();
+var LOADERS = {
+  library: () => Promise.resolve().then(() => (init_library(), library_exports)),
+  buckets: () => Promise.resolve().then(() => (init_buckets(), buckets_exports)),
+  trash: () => Promise.resolve().then(() => (init_trash(), trash_exports)),
+  auth: () => Promise.resolve().then(() => (init_auth(), auth_exports)),
+  setup: () => Promise.resolve().then(() => (init_setup(), setup_exports))
+};
 async function run(argv, overrides = {}) {
   const io = overrides.io ?? processIo();
-  const wantsJson = argv.includes("--json");
+  const pretty = argv.includes("--pretty");
   try {
-    const parsed = parseCommandLine(argv, COMMANDS.map((command2) => command2.spec));
+    const parsed = parseCommandLine(argv, SPECS);
     if (parsed.values.version) {
-      io.stdout(wantsJson ? JSON.stringify({ version: CLI_VERSION }) + "\n" : `${CLI_VERSION}
+      io.stdout(`${CLI_VERSION}
 `);
       return EXIT.ok;
     }
@@ -3836,7 +3760,7 @@ async function run(argv, overrides = {}) {
         io.stdout(groupHelp(parsed.group) + "\n");
         return EXIT.ok;
       }
-      throw usageError(`\`homebase ${parsed.group}\` needs a sub-command.`, groupHelp(parsed.group));
+      throw usageError(`\`homebase ${parsed.group}\` needs a sub-command.`, groupHelp(parsed.group).replace(/\n/g, " | "));
     }
     if (!parsed.command) {
       io.stdout(topHelp() + "\n");
@@ -3846,34 +3770,41 @@ async function run(argv, overrides = {}) {
       io.stdout(helpFor(parsed.command) + "\n");
       return EXIT.ok;
     }
-    const command = COMMANDS.find((entry) => entry.spec === parsed.command);
-    const ctx = createCtx(parsed, { ...overrides, io });
-    await command.run(ctx, parsed);
+    const spec = parsed.command;
+    let data;
+    if (spec.module === "schema") {
+      const name = parsed.positionals.join(" ") || void 0;
+      if (name && !SPECS.some((entry) => entry.name === name || entry.aliases?.includes(name))) throw usageError(`No command "${name}".`, "Run `homebase schema` for all of them.");
+      data = schemaJson(name);
+    } else {
+      const [{ createCtx: createCtx2 }, module] = await Promise.all([Promise.resolve().then(() => (init_context(), context_exports)), LOADERS[spec.module]()]);
+      const ctx = createCtx2(parsed, { ...overrides, io });
+      data = await module.commands[spec.name](ctx, parsed);
+    }
+    io.stdout(formatJson(okJson(data), pretty));
     return EXIT.ok;
   } catch (error) {
-    if (error instanceof CliError) {
-      if (!error.alreadyReported) reportError(io, wantsJson, error);
-      else {
-        const stop = doNotRetryLine(error);
-        if (stop) io.stderr(`${stop}
+    const failure = error instanceof CliError ? error : new CliError(`Unexpected error: ${error instanceof Error ? error.message : String(error)}`, { code: "internal" });
+    io.stdout(formatJson(errorJson(failure), pretty));
+    if (!(error instanceof CliError) && process.env.HOMEBASE_DEBUG && error instanceof Error) io.stderr(`${error.stack}
 `);
-      }
-      return error.exitCode;
-    }
-    const wrapped = new CliError(`Unexpected error: ${error instanceof Error ? error.message : String(error)}`, { code: "internal" });
-    reportError(io, wantsJson, wrapped);
-    if (process.env.HOMEBASE_DEBUG && error instanceof Error) io.stderr(`${error.stack}
-`);
-    return EXIT.other;
+    return failure.exitCode;
   }
 }
 
 // src/bin.ts
 var major = Number(process.versions.node.split(".")[0]);
 if (major < 20) {
-  process.stderr.write(`homebase needs Node.js 20 or newer (this is ${process.versions.node}).
-`);
+  process.stdout.write(
+    JSON.stringify({ ok: false, schema: 1, error: { code: "node_too_old", message: `homebase needs Node.js 20 or newer (this is ${process.versions.node}).`, exit_code: 1 } }) + "\n"
+  );
   process.exit(1);
 }
-if (process.env.NO_COLOR && process.env.FORCE_COLOR) delete process.env.FORCE_COLOR;
-process.exitCode = await run(process.argv.slice(2));
+var code = await run(process.argv.slice(2));
+process.exitCode = code;
+var pending = 2;
+var done = () => {
+  if (--pending === 0) process.exit(code);
+};
+process.stdout.write("", done);
+process.stderr.write("", done);
