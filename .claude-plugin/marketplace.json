@@ -1,7 +1,9 @@
 {
   "name": "homebase",
   "description": "Homebase plugins for Claude Code: the Homebase skill, MCP server and slash commands.",
-  "owner": { "name": "Feeble" },
+  "owner": {
+    "name": "Feeble"
+  },
   "plugins": [
     {
       "name": "homebase",
@@ -9,7 +11,13 @@
       "description": "Find, fetch, upload and organise your team's assets in Homebase.",
       "version": "0.1.0",
       "category": "productivity",
-      "keywords": ["assets", "brand", "dam", "library"]
+      "keywords": [
+        "assets",
+        "brand",
+        "dam",
+        "library"
+      ],
+      "homepage": "https://homebase-delta-seven.vercel.app"
     }
   ]
 }

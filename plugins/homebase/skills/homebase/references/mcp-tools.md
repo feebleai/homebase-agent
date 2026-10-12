@@ -55,6 +55,8 @@ With a shell, use the CLI: `homebase upload <files…> --bucket "<name>" --tag <
 
 "Clean up", "tidy" or "dedupe" are not a yes. Never send the token in the same turn as the preview.
 
+If your client supports MCP elicitation (protocol 2026-07-28), Homebase shows the user its own confirmation dialog during the first `delete_assets` call and deletes only if they tick yes. The result is then `{preview: false, deleted, notFound}`, or `{declined: true}` with nothing deleted; don't ask again unless the user brings it up.
+
 ## Errors over MCP
 
 A failed tool returns `isError: true` with the server's message:

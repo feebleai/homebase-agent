@@ -1,6 +1,7 @@
 ---
 name: homebase
 description: The team's shared asset library (Homebase). Use whenever the user asks to see, show, find, describe, get, upload, tag, share or send images, photos, pictures, banners, hero shots or hero images, logos, brand assets, decks, PDFs, videos or campaign files ("show me the hero image", "what does our logo look like", "find the latest files from the summer campaign", "send the summer files to the client"), mentions "our files", "our assets", "the library" or "the client", or names Homebase. These files live in Homebase, not in the local repo or disk, even when a local file has a similar name. Also for organising assets into buckets (campaigns, client handoffs), deleting or restoring them. Uses the Homebase MCP tools when connected, otherwise the homebase CLI.
+license: MIT
 ---
 
 # Homebase

@@ -1,6 +1,9 @@
 interface:
   display_name: "Homebase"
   short_description: "Find, fetch and organise your team's brand and campaign assets"
+  icon_small: "./assets/icon-small.svg"
+  icon_large: "./assets/icon-large.png"
+  brand_color: "#3B82F6"
   default_prompt: "Find the latest files from our most recent campaign in Homebase"
 policy:
   allow_implicit_invocation: true

@@ -19,5 +19,13 @@
       "type": "http",
       "url": "https://next-caribou-11.convex.site/mcp"
     }
-  }
+  },
+  "homepage": "https://homebase-delta-seven.vercel.app",
+  "repository": "https://github.com/feebleai/homebase-agent",
+  "license": "MIT",
+  "icon": "./assets/logo.png",
+  "documentationUrl": "https://homebase-delta-seven.vercel.app/docs/agents",
+  "supportUrl": "https://homebase-delta-seven.vercel.app/support",
+  "privacyPolicyUrl": "https://homebase-delta-seven.vercel.app/privacy",
+  "termsOfServiceUrl": "https://homebase-delta-seven.vercel.app/terms"
 }

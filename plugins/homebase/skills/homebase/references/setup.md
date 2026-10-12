@@ -8,7 +8,7 @@ The MCP server is at `<api>/mcp` (today `https://next-caribou-11.convex.site/mcp
 
 | Client | Setup |
 |---|---|
-| **Claude Code** | Install the plugin: `claude plugin marketplace add <repo>/agent`, then `claude plugin install homebase@homebase`. It brings this skill, the MCP server, the `/homebase:*` commands and a bundled copy of the CLI (no global install needed). Then run `/mcp`, pick **homebase** and choose **Authenticate**. Over SSH or headless: `claude mcp login plugin:homebase:homebase --no-browser`, open the printed link on any machine, approve, and paste the redirect URL back. Without the plugin: `claude mcp add --transport http --scope user homebase <url>` (what `homebase connect claude-code` runs), then `/mcp` or `claude mcp login homebase --no-browser`. For CI, add the server with a Settings key instead: `claude mcp add --transport http --scope user homebase <url> --header "Authorization: Bearer $HOMEBASE_TOKEN"` |
+| **Claude Code** | Install the plugin: `claude plugin marketplace add feebleai/homebase-agent`, then `claude plugin install homebase@homebase`. It brings this skill, the MCP server, the `/homebase:*` commands and a bundled copy of the CLI (no global install needed). Then run `/mcp`, pick **homebase** and choose **Authenticate**. Over SSH or headless: `claude mcp login plugin:homebase:homebase --no-browser`, open the printed link on any machine, approve, and paste the redirect URL back. Without the plugin: `claude mcp add --transport http --scope user homebase <url>` (what `homebase connect claude-code` runs), then `/mcp` or `claude mcp login homebase --no-browser`. For CI, add the server with a Settings key instead: `claude mcp add --transport http --scope user homebase <url> --header "Authorization: Bearer $HOMEBASE_TOKEN"` |
 | **claude.ai / Claude Desktop** | **Customize → Connectors**, then **+** → **Add custom connector**, with the URL. Click **Connect** and approve in the Homebase window. On Team/Enterprise an owner adds it first in the organization's connector settings. Optionally add this skill under **Customize → Skills** (upload `homebase-skill.zip`) |
 
 ### Claude Code permissions
@@ -29,7 +29,7 @@ Add `Bash(homebase import *)` or `Bash(homebase download *)` when you want those
 
 | Client | Setup |
 |---|---|
-| **Codex** (CLI and app) | Install the plugin: `codex plugin marketplace add <repo>/agent`, then `codex plugin add homebase@homebase`. Then `codex mcp login homebase` (OAuth in the browser; add `--no-browser` over SSH and paste the callback URL). Without the plugin: `homebase connect codex` shows a diff adding `[mcp_servers.homebase] url = "…"` to `config.toml`, `homebase connect codex --write` writes it, and then you run `codex mcp login homebase`. `homebase connect codex --token` uses a Settings key from `$HOMEBASE_TOKEN` instead (`bearer_token_env_var`) |
+| **Codex** (CLI and app) | Install the plugin: `codex plugin marketplace add feebleai/homebase-agent`, then `codex plugin add homebase@homebase`. Then `codex mcp login homebase` (OAuth in the browser; add `--no-browser` over SSH and paste the callback URL). Without the plugin: `homebase connect codex` shows a diff adding `[mcp_servers.homebase] url = "…"` to `config.toml`, `homebase connect codex --write` writes it, and then you run `codex mcp login homebase`. `homebase connect codex --token` uses a Settings key from `$HOMEBASE_TOKEN` instead (`bearer_token_env_var`) |
 | **ChatGPT** | Go to **chatgpt.com/plugins**, click **+**, then **Create custom MCP server**: name Homebase, the URL, authentication OAuth. Accept the risk notice, create it, and approve in the Homebase window. Custom MCP servers need **Developer mode**: OpenAI's help center lists it for Business, Enterprise and Edu (an admin allows it in workspace settings; members turn it on in Settings → Apps → Advanced settings). If you don't see **Create custom MCP server**, turn Developer mode on first. The skill can be uploaded under Skills → Create |
 
 ### Codex: headless runs (`codex exec`)
@@ -85,7 +85,7 @@ Each token or connection has its own permissions, chosen when it's approved:
 | `assets:read` | download | yes |
 | `assets:write` | upload, add links, rename | yes |
 | `tags:write` | tag | yes |
-| `buckets:write` | manage buckets | no |
+| `buckets:write` | manage buckets | yes (recommended) |
 | `assets:delete` | soft delete and restore; owners and admins only | no |
 
 You can see each connection in Settings → Agents, narrow or widen its permissions there, or revoke it.

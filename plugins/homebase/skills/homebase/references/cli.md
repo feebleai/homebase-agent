@@ -28,10 +28,10 @@ Global flags: `--profile <name>` (env `HOMEBASE_PROFILE`), `--api <url>` (env `H
 
 | Command | Output fields |
 |---|---|
-| `search ["<request>"] [--type t] [--bucket b\|none] [--tag t] [--source human\|agent] [--ignore part]… [--limit 1-50] [--cursor c]` | `interpretation:{buckets?,dateRange?:{label,from,to},fileTypes?,tags?,terms?,source?,sort?,notes?,ignored?}, groups:[{label,kind:bucket\|also\|results,results:[Item]}], total, nextCursor?` |
+| `search ["<request>"] [--type t] [--bucket b\|none] [--tag t] [--source human\|agent] [--ignore part]… [--limit 1-25] [--cursor c]` | `interpretation:{buckets?,dateRange?:{label,from,to},fileTypes?,tags?,terms?,source?,sort?,notes?,ignored?}, groups:[{label,kind:bucket\|also\|results,results:[Item]}], total, nextCursor?` |
 | `recent [same filters]` | same as search, newest first |
 | `get <id>` | `{id,title,type,mimeType?,source?,addedBy?,buckets:[name],tags,aiTags?,latestAt,uploadedAt,fileCreatedAt?,linkUrl?,appUrl,indexing?,description?,visibleText?,truncated?}` |
-| `view <id \| "words">` | `{id,title,path,kind:preview\|original,bytes,contentType,search?:{query,alternatives:[{id,title,type}]}}`. Read the file at `path` to see it. With words, the top search match is shown |
+| `view <id \| "words">` | `{id,title,path,kind:preview\|original,bytes,contentType,search?:{query,alternatives:[{id,title,type}]}}`. Read the file at `path` to see it (a private per-user cache unless `-o file`). With words, the top search match is shown |
 | `versions <id>` | `{id,title,currentVersion,versions:[{version,current,date,by?,note}]}` |
 | `link <id>` | `{id,url,kind:signed\|link,expiresAt?}`: a 1-hour link to give the user |
 | `download <id…> [-o dir] [--force]` | `{downloaded:[{id,title,path,bytes,resumed}],skipped:[{id,reason,url}],failed:[{id,error}]}` |
@@ -45,7 +45,7 @@ Item = `{id,title,type,buckets:[name],latestAt,tags}`. A bucket argument is an i
 
 | Command | Permission | Output fields |
 |---|---|---|
-| `upload <file\|dir\|glob…> [--bucket b]… [--tag t]… [--title t] [-r] [--allow-duplicate]` | assets:write (+ tags:write, buckets:write) | `{uploaded:[{file,id,title,type,buckets,tags}],duplicates:[{file,duplicate_of:{id,title,buckets},hint}],failed:[{file,error}],notTried:[file]}`. Does the presigned PUT itself, 4 files at once. A wrong bucket name fails before any bytes move. Stops at an auth or limit error (`ok:false`, the lists still there) |
+| `upload <file\|dir\|glob…> [--bucket b]… [--tag t]… [--title t] [-r] [--allow-duplicate]` | assets:write (+ tags:write, buckets:write) | `{uploaded:[{file,id,title,type,buckets,tags}],duplicates:[{file,duplicate_of:{id,title,buckets},hint}],failed:[{file,error}],notTried:[file]}`; `file` is relative to the working directory when inside it, else absolute. Does the presigned PUT itself, 4 files at once. A wrong bucket name fails before any bytes move. Stops at an auth or limit error (`ok:false`, the lists still there) |
 | `import <url> [--title] [--tag]… [--bucket]… [--link] [--allow-duplicate]` | assets:write | `{imported:true,importedAs:file\|link,id,title,type,buckets,tags}` or `{imported:false,duplicate_of,hint}` |
 | `tag <id…> --add a,b --remove c` | tags:write | `{results:[{id,tags,added,removed}]}` |
 | `rename <id> <title…>` | assets:write | `{id,title}` |

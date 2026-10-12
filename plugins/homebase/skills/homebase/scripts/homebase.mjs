@@ -112,19 +112,28 @@ var init_errors = __esm({
 function mcpUrl(api) {
   return `${api.replace(/\/+$/, "")}/mcp`;
 }
-var DEFAULT_API_URL, DEFAULT_CLIENT_ID, REFRESH_SKEW_MS, LOGIN_TIMEOUT_MS, CLI_VERSION, CLIENT_NAME, USER_AGENT, KEYCHAIN_SERVICE, ALL_SCOPES, MAX_AUTO_RETRY_S;
+var DEFAULT_API_URL, WEBSITE_URL, DEFAULT_CLIENT_ID, REFRESH_SKEW_MS, REFRESH_TIMEOUT_MS, LOGIN_TIMEOUT_MS, CLI_VERSION, CLIENT_NAME, USER_AGENT, KEYCHAIN_SERVICE, ALL_SCOPES, SEARCH_LIMIT_MAX, SEARCH_LIMIT_DEFAULT, BROWSE_LIMIT_DEFAULT, PAGE_LIMIT_MAX, BUCKETS_LIMIT_DEFAULT, BUCKET_ASSETS_LIMIT_DEFAULT, DELETED_LIMIT_DEFAULT, MAX_AUTO_RETRY_S;
 var init_constants = __esm({
   "src/constants.ts"() {
     "use strict";
     DEFAULT_API_URL = "https://next-caribou-11.convex.site";
-    DEFAULT_CLIENT_ID = "https://homebase-delta-seven.vercel.app/oauth/homebase-cli.json";
+    WEBSITE_URL = "https://homebase-delta-seven.vercel.app";
+    DEFAULT_CLIENT_ID = `${WEBSITE_URL}/oauth/homebase-cli.json`;
     REFRESH_SKEW_MS = 5 * 60 * 1e3;
+    REFRESH_TIMEOUT_MS = 30 * 1e3;
     LOGIN_TIMEOUT_MS = 10 * 60 * 1e3;
     CLI_VERSION = "0.1.0";
     CLIENT_NAME = "Homebase CLI";
     USER_AGENT = `homebase-cli/${CLI_VERSION} (node ${process.version}; ${process.platform})`;
     KEYCHAIN_SERVICE = "homebase-cli";
     ALL_SCOPES = ["search", "assets:read", "assets:write", "tags:write", "buckets:write", "assets:delete"];
+    SEARCH_LIMIT_MAX = 25;
+    SEARCH_LIMIT_DEFAULT = 24;
+    BROWSE_LIMIT_DEFAULT = 10;
+    PAGE_LIMIT_MAX = 200;
+    BUCKETS_LIMIT_DEFAULT = 100;
+    BUCKET_ASSETS_LIMIT_DEFAULT = 50;
+    DELETED_LIMIT_DEFAULT = 50;
     MAX_AUTO_RETRY_S = 10;
   }
 });
@@ -220,7 +229,11 @@ var init_specs = __esm({
     };
     FULL = { type: "boolean", description: "Every field the server sends, text uncut" };
     THUMBS = { type: "boolean", description: "Add thumbnailUrl to each asset" };
-    LIMIT = { type: "string", value: "n", description: "Results per page, 1-50 (default 24)" };
+    LIMIT = {
+      type: "string",
+      value: "n",
+      description: `Results per page, 1-${SEARCH_LIMIT_MAX} (default ${SEARCH_LIMIT_DEFAULT} for a search, ${BROWSE_LIMIT_DEFAULT} without words or for recent)`
+    };
     CURSOR = { type: "string", value: "c", description: "nextCursor from the previous page (valid 10 min)" };
     FILTERS = {
       type: { type: "string", value: "t", description: "image|document|video|link|embed|other" },
@@ -284,7 +297,7 @@ var init_specs = __esm({
         summary: "Save an asset's preview image (1280x720 JPEG) and print its path; read that file to see it. Takes an id, or the user's words: then the top search match is shown and the next ones are listed.",
         usage: 'homebase view <id | "request"> [-o file] [--original]',
         options: {
-          output: { type: "string", short: "o", value: "file", description: "Where to save (default: a temp file)" },
+          output: { type: "string", short: "o", value: "file", description: "Where to save (default: your private cache, e.g. ~/.cache/homebase/previews)" },
           original: { type: "boolean", description: "The original image instead of the preview (images up to 20 MB)" }
         },
         minArgs: 1,
@@ -319,7 +332,7 @@ var init_specs = __esm({
         summary: "The workspace's buckets (campaigns, client handoffs), newest first.",
         usage: "homebase buckets [--limit n] [--cursor c] [--all] [--full]",
         options: {
-          limit: { type: "string", value: "n", description: "Per page, 1-200 (default 100)" },
+          limit: { type: "string", value: "n", description: `Per page, 1-${PAGE_LIMIT_MAX} (default ${BUCKETS_LIMIT_DEFAULT})` },
           cursor: { type: "string", value: "c", description: "nextCursor from the previous page" },
           all: { type: "boolean", description: "Every page" },
           full: FULL
@@ -334,7 +347,7 @@ var init_specs = __esm({
         summary: "A bucket's assets in the bucket's order.",
         usage: "homebase bucket ls <bucket> [--limit n] [--cursor c] [--all] [--with-thumbnails] [--full]",
         options: {
-          limit: { type: "string", value: "n", description: "Per page, 1-200 (default 100)" },
+          limit: { type: "string", value: "n", description: `Per page, 1-${PAGE_LIMIT_MAX} (default ${BUCKET_ASSETS_LIMIT_DEFAULT})` },
           cursor: { type: "string", value: "c", description: "nextCursor from the previous page" },
           all: { type: "boolean", description: "Every page" },
           "with-thumbnails": THUMBS,
@@ -366,7 +379,7 @@ var init_specs = __esm({
           "allow-duplicate": { type: "boolean", description: "Upload even if the same bytes are already in the library" }
         },
         minArgs: 1,
-        output: "uploaded:[{file,...Created}], duplicates:[{file,duplicate_of:{id,title,buckets:[name]},hint}], failed:[{file,error:{code,message}}], notTried:[file]",
+        output: "uploaded:[{file,...Created}], duplicates:[{file,duplicate_of:{id,title,buckets:[name]},hint}], failed:[{file,error:{code,message}}], notTried:[file]  (file: the path relative to the working directory when inside it, else absolute)",
         exits: "on a failure: ok:false with these lists and error = the first failure; stops at auth (3) or limit (4)"
       },
       {
@@ -449,7 +462,7 @@ var init_specs = __esm({
         summary: "Recently deleted assets (restorable 30 days by an owner or admin).",
         usage: "homebase deleted [--limit n] [--cursor c]",
         options: {
-          limit: { type: "string", value: "n", description: "Per page, 1-100 (default 50)" },
+          limit: { type: "string", value: "n", description: `Per page, 1-${PAGE_LIMIT_MAX} (default ${DELETED_LIMIT_DEFAULT})` },
           cursor: { type: "string", value: "c", description: "nextCursor from the previous page" }
         },
         maxArgs: 0,
@@ -478,7 +491,7 @@ var init_specs = __esm({
           scopes: { type: "string", value: "list", description: "Comma-separated: search,assets:read,assets:write,tags:write,buckets:write,assets:delete" }
         },
         maxArgs: 0,
-        output: "1st line: event:login_started, flow:browser|device, verification_url, user_code?, expires_at, browser_opened, next_step. 2nd line: event:logged_in, profile, api, workspace:{name,slug}, user:{name,email,role}, scopes, storage:keychain|file",
+        output: "1st line: event:login_started, flow:browser|device, verification_url, user_code?, expires_at, browser_opened, next_step. 2nd line: event:logged_in, profile, api, workspace:{name,slug}, user:{name,role}, scopes, storage:keychain|file",
         exits: "3 denied or expired; 2 HOMEBASE_API_URL names another server (pass --api to mean it)"
       },
       {
@@ -497,7 +510,7 @@ var init_specs = __esm({
         summary: "Workspace, user, permissions and this month's usage for the current login.",
         usage: "homebase whoami",
         maxArgs: 0,
-        output: "profile, tokenSource:env|keychain|file, api, login:{kind,renews,access_expires_at?}, workspace:{id,name,slug,url}, user:{id,name,email,role}, token:{name,scopes}, subscription?, usage?, rateLimit?"
+        output: "profile, tokenSource:env|keychain|file, api, login:{kind,renews,access_expires_at?}, workspace:{id,name,slug,url}, user:{id,name,role}, token:{name,scopes}, subscription?, usage?, rateLimit?"
       },
       {
         name: "profiles",
@@ -812,9 +825,55 @@ var init_output = __esm({
   }
 });
 
+// src/cache.ts
+import { randomBytes } from "node:crypto";
+import { chmodSync, createWriteStream, lstatSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
+function previewCacheDir(env, platform = process.platform, home = env.HOME || homedir()) {
+  if (platform === "win32") return join(env.LOCALAPPDATA || join(env.USERPROFILE || home, "AppData", "Local"), "homebase", "previews");
+  if (env.XDG_CACHE_HOME && isAbsolute(env.XDG_CACHE_HOME)) return join(env.XDG_CACHE_HOME, "homebase", "previews");
+  if (platform === "darwin") return join(home, "Library", "Caches", "homebase", "previews");
+  return join(home, ".cache", "homebase", "previews");
+}
+function safeIdPart(id) {
+  return id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100) || "asset";
+}
+function unsafe(message) {
+  return new CliError(message, { code: "unsafe_cache_dir" });
+}
+function ensurePrivateDir(dir, platform = process.platform) {
+  mkdirSync(dir, { recursive: true, mode: 448 });
+  const stat = lstatSync(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafe(`${dir} isn't a plain folder (a symlink?). Remove it, or pass -o <file>.`);
+  if (platform !== "win32" && typeof process.getuid === "function") {
+    if (stat.uid !== process.getuid()) throw unsafe(`${dir} belongs to another user. Remove it, or pass -o <file>.`);
+    if ((stat.mode & 63) !== 0) chmodSync(dir, 448);
+  }
+  return dir;
+}
+async function writePrivateFile(path, body) {
+  const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`);
+  try {
+    await pipeline(Readable.from(body), createWriteStream(temp, { flags: "wx", mode: 384 }));
+    renameSync(temp, path);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
+}
+var init_cache = __esm({
+  "src/cache.ts"() {
+    "use strict";
+    init_errors();
+  }
+});
+
 // src/files.ts
 import { readdirSync, statSync } from "node:fs";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { basename as basename2, extname, join as join2, resolve, sep } from "node:path";
 function mimeFor(path) {
   return MIME[extname(path).slice(1).toLowerCase()] ?? "application/octet-stream";
 }
@@ -825,7 +884,8 @@ function extensionFor(mimeType) {
   return Object.entries(MIME).find(([, mime]) => mime === clean)?.[0];
 }
 function safeFilename(name) {
-  const cleaned = name.replace(/[\u0000-\u001f<>:"/\\|?*]+/g, " ").replace(/\s+/g, " ").trim().replace(/^\.+/, "").slice(0, 180);
+  let cleaned = name.replace(/[\u0000-\u001f<>:"/\\|?*]+/g, " ").replace(/\s+/g, " ").trim().replace(/^\.+/, "").slice(0, 180).replace(/[. ]+$/, "");
+  if (WINDOWS_RESERVED.test(cleaned.split(".")[0].trimEnd())) cleaned = `_${cleaned}`;
   return cleaned || "download";
 }
 function downloadFilename(opts) {
@@ -900,7 +960,7 @@ function walk(dir, recursive, out) {
   }
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith(".")) continue;
-    const full = join(dir, entry.name);
+    const full = join2(dir, entry.name);
     if (entry.isDirectory()) {
       if (recursive) walk(full, recursive, out);
     } else if (entry.isFile()) out.push(full);
@@ -943,7 +1003,7 @@ function expandUploadArgs(args, opts) {
   }
   return [...new Set(files)];
 }
-var MIME, EXTENSION_FOR, GLOB_CHARS;
+var MIME, EXTENSION_FOR, WINDOWS_RESERVED, GLOB_CHARS;
 var init_files = __esm({
   "src/files.ts"() {
     "use strict";
@@ -1004,13 +1064,14 @@ var init_files = __esm({
       "image/tiff": "tiff",
       "application/postscript": "eps"
     };
+    WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)$/i;
     GLOB_CHARS = /[*?[]/;
   }
 });
 
 // src/http.ts
 import { createRequire } from "node:module";
-import { Readable } from "node:stream";
+import { Readable as Readable2 } from "node:stream";
 function transport(protocol) {
   const secure = protocol === "https:";
   const mod = secure ? nodeRequire("node:https") : nodeRequire("node:http");
@@ -1062,7 +1123,7 @@ async function requestOnce(input, init) {
     if (body === void 0 || body === null) req.end();
     else if (typeof body === "string" || body instanceof Uint8Array) req.end(body);
     else {
-      const source = body instanceof Readable ? body : Readable.from(body);
+      const source = body instanceof Readable2 ? body : Readable2.from(body);
       source.on("error", (error) => req.destroy(error));
       source.pipe(req);
     }
@@ -1214,6 +1275,7 @@ var init_buckets = __esm({
   "src/commands/buckets.ts"() {
     "use strict";
     init_args();
+    init_constants();
     init_errors();
     init_output();
     bucketLists = /* @__PURE__ */ new WeakMap();
@@ -1224,7 +1286,7 @@ var init_buckets = __esm({
         list = await listAllBuckets(ctx.api);
       } else {
         const page = await ctx.api.get("/v1/buckets", {
-          limit: intOption(parsed.values.limit, "limit", 1, 200),
+          limit: intOption(parsed.values.limit, "limit", 1, PAGE_LIMIT_MAX),
           cursor: stringOption(parsed.values.cursor)
         });
         list = page.buckets;
@@ -1248,7 +1310,7 @@ var init_buckets = __esm({
       try {
         for (let page = 0; page < (parsed.values.all ? 50 : 1); page++) {
           const body = await ctx.api.get(path, {
-            limit: intOption(parsed.values.limit, "limit", 1, 200),
+            limit: intOption(parsed.values.limit, "limit", 1, PAGE_LIMIT_MAX),
             cursor
           });
           name ??= body.bucket?.name;
@@ -1309,12 +1371,12 @@ var init_buckets = __esm({
 var library_exports = {};
 __export(library_exports, {
   commands: () => commands2,
-  duplicateOf: () => duplicateOf
+  duplicateOf: () => duplicateOf,
+  shownPath: () => shownPath
 });
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync as statSync2, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename as basename2, join as join2, relative, resolve as resolve2 } from "node:path";
-import { pipeline } from "node:stream/promises";
+import { createReadStream, createWriteStream as createWriteStream2, existsSync, mkdirSync as mkdirSync2, readFileSync, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "node:fs";
+import { basename as basename3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep as sep2 } from "node:path";
+import { pipeline as pipeline2 } from "node:stream/promises";
 async function searchFilters(ctx, parsed) {
   const filters = {};
   const top = {};
@@ -1352,7 +1414,7 @@ async function runSearch(ctx, parsed, query) {
     response = await ctx.api.post("/v1/search", {
       ...query || !cursor ? { query } : {},
       ...cursor ? { cursor } : {},
-      limit: intOption(parsed.values.limit, "limit", 1, 50),
+      limit: intOption(parsed.values.limit, "limit", 1, SEARCH_LIMIT_MAX),
       ...await searchFilters(ctx, parsed)
     });
   } catch (error) {
@@ -1363,13 +1425,14 @@ async function runSearch(ctx, parsed, query) {
   }
   return searchJson(response, ctx.view);
 }
-async function fetchToFile(ctx, url, path) {
+async function fetchToFile(ctx, url, path, opts = {}) {
   const response = await ctx.fetch(url, { method: "GET" });
   if (!response.ok || !response.body) {
     await discard(response);
     throw new CliError(`Couldn't fetch the file (HTTP ${response.status}).`, { code: `http_${response.status}`, status: response.status });
   }
-  await pipeline(response.body, createWriteStream(path));
+  if (opts.private) await writePrivateFile(path, response.body);
+  else await pipeline2(response.body, createWriteStream2(path));
   return { bytes: statSync2(path).size, contentType: response.headers.get("content-type") ?? void 0 };
 }
 async function viewTarget(ctx, ref) {
@@ -1384,7 +1447,7 @@ async function downloadOne(ctx, id, dir, force) {
   if (link2.kind === "link" && (asset.type === "link" || asset.type === "embed")) {
     return { id, reason: "This asset is a link to a web page, not a file.", url: link2.url };
   }
-  const part = join2(dir, `.${id}.homebase-part`);
+  const part = join3(dir, `.${id}.homebase-part`);
   const partTag = `${part}.etag`;
   let offset = 0;
   let etag;
@@ -1398,8 +1461,8 @@ async function downloadOne(ctx, id, dir, force) {
   let response = await ctx.fetch(link2.url, { method: "GET", headers: offset ? { Range: `bytes=${offset}-`, "If-Range": etag } : {} });
   if (response.status === 416 || response.status === 206 && offset > 0 && response.headers.get("etag") !== null && response.headers.get("etag") !== etag) {
     await discard(response);
-    rmSync(part, { force: true });
-    rmSync(partTag, { force: true });
+    rmSync2(part, { force: true });
+    rmSync2(partTag, { force: true });
     offset = 0;
     response = await ctx.fetch(link2.url, { method: "GET" });
   }
@@ -1408,18 +1471,18 @@ async function downloadOne(ctx, id, dir, force) {
     throw new CliError(`Downloading \u201C${asset.title}\u201D failed (HTTP ${response.status}). The link may have expired; retry.`, { code: `http_${response.status}`, status: response.status });
   }
   const name = downloadFilename({ title: asset.title, mimeType: asset.mimeType, contentDisposition: response.headers.get("content-disposition"), url: link2.url });
-  let target = join2(dir, name);
+  let target = join3(dir, name);
   if (!force) target = uniquePath(target, (candidate) => existsSync(candidate));
   const resumed = response.status === 206 && offset > 0;
   if (!resumed) {
     const fresh = response.headers.get("etag");
     if (fresh) writeFileSync(partTag, fresh);
-    else rmSync(partTag, { force: true });
+    else rmSync2(partTag, { force: true });
   }
-  await pipeline(response.body, createWriteStream(part, { flags: resumed ? "a" : "w" }));
+  await pipeline2(response.body, createWriteStream2(part, { flags: resumed ? "a" : "w" }));
   const bytes = statSync2(part).size;
-  renameSync(part, target);
-  rmSync(partTag, { force: true });
+  renameSync2(part, target);
+  rmSync2(partTag, { force: true });
   return { id, title: asset.title, path: target, bytes, resumed };
 }
 async function putFile(ctx, grant, path, size) {
@@ -1431,7 +1494,7 @@ async function putFile(ctx, grant, path, size) {
   });
   const text = await response.text().catch(() => "");
   if (!response.ok) {
-    throw new CliError(`Uploading the bytes of ${basename2(path)} failed (HTTP ${response.status}). ${text.slice(0, 200)}`.trim(), {
+    throw new CliError(`Uploading the bytes of ${basename3(path)} failed (HTTP ${response.status}). ${text.slice(0, 200)}`.trim(), {
       code: `upload_put_${response.status}`,
       status: response.status
     });
@@ -1466,6 +1529,10 @@ async function bucketTargets(ctx, value) {
   const refs = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
   return Promise.all(refs.map((ref) => resolveBucket(ctx.api, ref, { write: true })));
 }
+function shownPath(cwd, file) {
+  const rel = relative(cwd, file);
+  return rel && rel !== ".." && !rel.startsWith(`..${sep2}`) && !isAbsolute2(rel) ? rel : file;
+}
 function isMissingImportRoute(error) {
   return error instanceof CliError && error.code === "not_found" && /There is no POST \/v1\/assets\/import/.test(error.message);
 }
@@ -1473,6 +1540,8 @@ var FILE_TYPES, assetPath, stopsBatch, search, recent, get, versions, view, link
 var init_library = __esm({
   "src/commands/library.ts"() {
     "use strict";
+    init_cache();
+    init_constants();
     init_args();
     init_errors();
     init_files();
@@ -1519,9 +1588,15 @@ var init_library = __esm({
         );
       }
       const ext = kind === "preview" ? "jpg" : downloadFilename({ title: "x", mimeType: asset.mimeType }).split(".").pop() ?? "img";
-      const path = resolve2(ctx.cwd, stringOption(parsed.values.output) ?? join2(tmpdir(), "homebase-view", `${id}-${kind}.${ext}`));
-      mkdirSync(resolve2(path, ".."), { recursive: true });
-      const saved = await fetchToFile(ctx, url, path);
+      const output = stringOption(parsed.values.output);
+      let path;
+      if (output) {
+        path = resolve2(ctx.cwd, output);
+        mkdirSync2(resolve2(path, ".."), { recursive: true });
+      } else {
+        path = join3(ensurePrivateDir(previewCacheDir(ctx.env)), `${safeIdPart(id)}-${kind}.${ext.replace(/[^A-Za-z0-9]/g, "") || "img"}`);
+      }
+      const saved = await fetchToFile(ctx, url, path, { private: !output });
       return { id, title: asset.title, path, kind, bytes: saved.bytes, contentType: saved.contentType, ...target.search ? { search: target.search } : {} };
     };
     link = async (ctx, parsed) => {
@@ -1530,7 +1605,7 @@ var init_library = __esm({
     };
     download = async (ctx, parsed) => {
       const dir = resolve2(ctx.cwd, stringOption(parsed.values.output) ?? ".");
-      mkdirSync(dir, { recursive: true });
+      mkdirSync2(dir, { recursive: true });
       const ids = [...new Set(parsed.positionals)];
       const outcomes = [];
       let firstError;
@@ -1564,13 +1639,13 @@ var init_library = __esm({
       const title = stringOption(parsed.values.title);
       if (title && files.length > 1) throw usageError("--title works with one file only.");
       if (files.length > 500) throw usageError(`That's ${files.length} files; upload at most 500 per run.`);
-      for (const file of files) if (statSync2(file).size === 0) throw usageError(`${relative(ctx.cwd, file) || basename2(file)} is empty; nothing was uploaded.`);
+      for (const file of files) if (statSync2(file).size === 0) throw usageError(`${shownPath(ctx.cwd, file)} is empty; nothing was uploaded.`);
       const tags = listOption(parsed.values.tag);
       const allowDuplicate = Boolean(parsed.values["allow-duplicate"]);
       const bucketsReady = bucketTargets(ctx, parsed.values.bucket);
       bucketsReady.catch(() => {
       });
-      const shown = (file) => relative(ctx.cwd, file) || basename2(file);
+      const shown = (file) => shownPath(ctx.cwd, file);
       const outcomes = [];
       let bucketError;
       let stopError;
@@ -1588,7 +1663,7 @@ var init_library = __esm({
           let buckets2 = [];
           try {
             const grant = await ctx.api.post("/v1/uploads", {
-              filename: basename2(file),
+              filename: basename3(file),
               contentType: mimeType,
               size,
               ...allowDuplicate ? { allowDuplicate: true } : {}
@@ -1723,8 +1798,8 @@ var init_library = __esm({
 });
 
 // src/capabilities.ts
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join3 } from "node:path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join4 } from "node:path";
 function openApi(ctx) {
   return ctx.api.request("GET", "/v1/openapi.json", { auth: false }).catch(() => void 0);
 }
@@ -1747,7 +1822,7 @@ function operationText(spec, path, method) {
   return parts.join("\n");
 }
 function cachePath(ctx) {
-  return join3(ctx.store.dir, "capabilities.json");
+  return join4(ctx.store.dir, "capabilities.json");
 }
 function readCache(ctx) {
   try {
@@ -1766,7 +1841,7 @@ async function hasDeletePreview(ctx, now = Date.now()) {
   const yes = Boolean(spec && /confirm_token/.test(operationText(spec, "/v1/assets/delete", "post") ?? ""));
   if (yes) {
     try {
-      mkdirSync2(ctx.store.dir, { recursive: true, mode: 448 });
+      mkdirSync3(ctx.store.dir, { recursive: true, mode: 448 });
       writeFileSync2(cachePath(ctx), JSON.stringify({ ...cache, [origin2]: { deletePreview: true, checkedAt: now } }), { mode: 384 });
     } catch {
     }
@@ -1786,11 +1861,11 @@ var trash_exports = {};
 __export(trash_exports, {
   commands: () => commands3
 });
-import { randomBytes } from "node:crypto";
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 function pendingPath(ctx) {
-  return join4(ctx.store.dir, "pending-delete.json");
+  return join5(ctx.store.dir, "pending-delete.json");
 }
 function readLocal(ctx) {
   try {
@@ -1801,7 +1876,7 @@ function readLocal(ctx) {
   }
 }
 function writeLocal(ctx, data) {
-  mkdirSync3(ctx.store.dir, { recursive: true, mode: 448 });
+  mkdirSync4(ctx.store.dir, { recursive: true, mode: 448 });
   const now = Date.now();
   const fresh = Object.fromEntries(Object.entries(data).filter(([, entry]) => entry.expiresAt > now));
   writeFileSync3(pendingPath(ctx), JSON.stringify(fresh, null, 2), { mode: 384 });
@@ -1840,7 +1915,7 @@ async function localPreview(ctx, ids) {
       else throw error;
     }
   }
-  const token = `local_${randomBytes(12).toString("hex")}`;
+  const token = `local_${randomBytes2(12).toString("hex")}`;
   if (assets.length) writeLocal(ctx, { ...readLocal(ctx), [token]: { ids: assets.map((asset) => asset.id), api: ctx.apiUrl, expiresAt: Date.now() + LOCAL_TTL_S * 1e3 } });
   return { preview: true, assets, notFound, confirm_token: assets.length ? token : "", expires_in: LOCAL_TTL_S, source: "local" };
 }
@@ -1915,6 +1990,7 @@ var init_trash = __esm({
   "src/commands/trash.ts"() {
     "use strict";
     init_args();
+    init_constants();
     init_capabilities();
     init_errors();
     init_output();
@@ -1951,7 +2027,7 @@ var init_trash = __esm({
     deleted = async (ctx, parsed) => {
       let page;
       try {
-        page = await ctx.api.get("/v1/assets/deleted", { limit: intOption(parsed.values.limit, "limit", 1, 100), cursor: stringOption(parsed.values.cursor) });
+        page = await ctx.api.get("/v1/assets/deleted", { limit: intOption(parsed.values.limit, "limit", 1, PAGE_LIMIT_MAX), cursor: stringOption(parsed.values.cursor) });
       } catch (error) {
         if (isMissingRoute(error, /No asset with id deleted/)) throw unsupportedError("listing Recently deleted", "Owners and admins can see it in the web app: Library \u2192 Recently deleted.");
         throw error;
@@ -1985,9 +2061,10 @@ var init_trash = __esm({
 
 // src/credentials.ts
 import { spawnSync } from "node:child_process";
-import { chmodSync, closeSync, existsSync as existsSync2, mkdirSync as mkdirSync4, openSync, readFileSync as readFileSync4, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { homedir } from "node:os";
-import { join as join5 } from "node:path";
+import { randomBytes as randomBytes3 } from "node:crypto";
+import { chmodSync as chmodSync2, closeSync, existsSync as existsSync2, mkdirSync as mkdirSync5, openSync, readFileSync as readFileSync4, renameSync as renameSync3, rmSync as rmSync3, statSync as statSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join6 } from "node:path";
 function validateProfileName(name) {
   if (!PROFILE_NAME.test(name)) {
     throw usageError(`Invalid profile name "${name}". Use 1-40 letters, digits, dots, dashes or underscores.`);
@@ -1996,8 +2073,8 @@ function validateProfileName(name) {
 }
 function configDir(env = process.env) {
   if (env.HOMEBASE_CONFIG_DIR) return env.HOMEBASE_CONFIG_DIR;
-  if (env.XDG_CONFIG_HOME) return join5(env.XDG_CONFIG_HOME, "homebase");
-  return join5(homedir(), ".config", "homebase");
+  if (env.XDG_CONFIG_HOME) return join6(env.XDG_CONFIG_HOME, "homebase");
+  return join6(homedir2(), ".config", "homebase");
 }
 function onPath(command) {
   const result = spawnSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" });
@@ -2060,8 +2137,8 @@ function defaultKeychain(env = process.env) {
 function writePrivate(path, value) {
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   writeFileSync4(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
-  chmodSync(tmp, 384);
-  renameSync2(tmp, path);
+  chmodSync2(tmp, 384);
+  renameSync3(tmp, path);
 }
 function readJsonFile(path, fallback) {
   if (!existsSync2(path)) return fallback;
@@ -2093,6 +2170,17 @@ function asSession(value) {
 function canRefresh(session) {
   return Boolean(session.refresh_token && session.issuer && session.client_id);
 }
+function lockOwner(path) {
+  try {
+    const text = readFileSync4(path, "utf8");
+    return text.trim().split(/\s+/)[2] ?? text;
+  } catch {
+    return void 0;
+  }
+}
+function removeLockIf(path, owner) {
+  if (lockOwner(path) === owner) rmSync3(path, { force: true });
+}
 var PROFILE_NAME, BLOB_PREFIX, CredentialStore, LOCK_STALE_MS, LOCK_WAIT_MS;
 var init_credentials = __esm({
   "src/credentials.ts"() {
@@ -2109,19 +2197,19 @@ var init_credentials = __esm({
         this.keychain = opts.keychain === void 0 ? defaultKeychain(opts.env) : opts.keychain;
       }
       get configPath() {
-        return join5(this.dir, "config.json");
+        return join6(this.dir, "config.json");
       }
       get credentialsPath() {
-        return join5(this.dir, "credentials.json");
+        return join6(this.dir, "credentials.json");
       }
       get pendingPath() {
-        return join5(this.dir, "pending-login.json");
+        return join6(this.dir, "pending-login.json");
       }
       lockPath(profile) {
-        return join5(this.dir, `refresh-${validateProfileName(profile)}.lock`);
+        return join6(this.dir, `refresh-${validateProfileName(profile)}.lock`);
       }
       ensureDir() {
-        mkdirSync4(this.dir, { recursive: true, mode: 448 });
+        mkdirSync5(this.dir, { recursive: true, mode: 448 });
       }
       readConfig() {
         const config = readJsonFile(this.configPath, { profiles: {} });
@@ -2139,7 +2227,7 @@ var init_credentials = __esm({
       writeFileEntries(entries) {
         this.ensureDir();
         if (!Object.keys(entries).length) {
-          rmSync2(this.credentialsPath, { force: true });
+          rmSync3(this.credentialsPath, { force: true });
           return;
         }
         writePrivate(this.credentialsPath, { profiles: entries });
@@ -2255,30 +2343,43 @@ var init_credentials = __esm({
         return readJsonFile(this.pendingPath, null);
       }
       clearPending() {
-        rmSync2(this.pendingPath, { force: true });
+        rmSync3(this.pendingPath, { force: true });
       }
       /**
        * Runs `fn` holding a cross-process lock on the profile's refresh (an
        * O_EXCL lock file). A lock older than LOCK_STALE_MS is taken over (its
        * holder died). Waits up to LOCK_WAIT_MS, like Claude Code's
        * ~/.claude/.oauth_refresh.lock.
+       *
+       * The lock file holds a random owner nonce, and is removed only while it
+       * still holds ours: a holder whose lock was taken over never deletes the
+       * next holder's. A stale lock is removed only if it still holds the nonce
+       * that was judged stale.
        */
       async withRefreshLock(profile, fn, opts = {}) {
         this.ensureDir();
         const path = this.lockPath(profile);
         const sleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
         const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
-        let fd;
-        while (fd === void 0) {
+        const staleMs = opts.staleMs ?? LOCK_STALE_MS;
+        const nonce = randomBytes3(16).toString("hex");
+        let held = false;
+        while (!held) {
           try {
-            fd = openSync(path, "wx", 384);
-            writeFileSync4(fd, `${process.pid} ${(/* @__PURE__ */ new Date()).toISOString()}
+            const fd = openSync(path, "wx", 384);
+            try {
+              writeFileSync4(fd, `${process.pid} ${(/* @__PURE__ */ new Date()).toISOString()} ${nonce}
 `);
+            } finally {
+              closeSync(fd);
+            }
+            held = true;
           } catch (error) {
             if (error.code !== "EEXIST") throw error;
             try {
-              if (Date.now() - statSync3(path).mtimeMs > LOCK_STALE_MS) {
-                rmSync2(path, { force: true });
+              if (Date.now() - statSync3(path).mtimeMs > staleMs) {
+                const owner = lockOwner(path);
+                if (owner !== void 0) removeLockIf(path, owner);
                 continue;
               }
             } catch {
@@ -2293,18 +2394,17 @@ var init_credentials = __esm({
         try {
           return await fn();
         } finally {
-          closeSync(fd);
-          rmSync2(path, { force: true });
+          removeLockIf(path, nonce);
         }
       }
     };
-    LOCK_STALE_MS = 30 * 1e3;
-    LOCK_WAIT_MS = 20 * 1e3;
+    LOCK_STALE_MS = 3 * 60 * 1e3;
+    LOCK_WAIT_MS = 45 * 1e3;
   }
 });
 
 // src/oauth.ts
-import { createHash, randomBytes as randomBytes2 } from "node:crypto";
+import { createHash, randomBytes as randomBytes4 } from "node:crypto";
 function origin(url) {
   return new URL(url).origin;
 }
@@ -2383,12 +2483,12 @@ function cliClientIdFor(api, endpoints, env) {
   return sameOrigin(api, DEFAULT_API_URL) ? DEFAULT_CLIENT_ID : void 0;
 }
 function createPkce() {
-  const verifier = randomBytes2(32).toString("base64url");
+  const verifier = randomBytes4(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge, method: "S256" };
 }
 function randomState() {
-  return randomBytes2(24).toString("base64url");
+  return randomBytes4(24).toString("base64url");
 }
 function authorizeUrl(endpoints, params) {
   const url = new URL(endpoints.authorization_endpoint);
@@ -2444,7 +2544,10 @@ async function exchangeCode(fetchImpl, endpoints, params) {
 async function refreshTokens(fetchImpl, endpoints, params) {
   let result;
   try {
-    result = await send(fetchImpl, endpoints.token_endpoint, form({ grant_type: "refresh_token", refresh_token: params.refreshToken, client_id: params.clientId }));
+    result = await send(fetchImpl, endpoints.token_endpoint, {
+      ...form({ grant_type: "refresh_token", refresh_token: params.refreshToken, client_id: params.clientId }),
+      signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS)
+    });
   } catch (error) {
     return { ok: false, kind: "transient", message: error instanceof Error ? error.message : String(error) };
   }
@@ -2902,18 +3005,17 @@ async function startLoopback(opts) {
       reply(response, 404, callbackPage(false, "Not found", "This address only completes a Homebase CLI login."));
       return;
     }
+    const params = url.searchParams;
+    if (params.get("state") !== opts.state) {
+      reply(response, 400, callbackPage(false, "Not this login", "This sign-in response doesn't belong to the login waiting in your terminal, so it was ignored."));
+      return;
+    }
     done2 = true;
     const finish = (error2, value) => {
       response.on("finish", () => close());
       if (error2) settle.reject(error2);
       else settle.resolve(value);
     };
-    const params = url.searchParams;
-    if (params.get("state") !== opts.state) {
-      reply(response, 400, callbackPage(false, "Login not completed", "This sign-in response didn't match the login started in your terminal, so it was ignored. Run `homebase login` again."));
-      finish(new CliError("The browser returned a response for a different login (state mismatch). Nothing was saved. Run `homebase login` again.", { exitCode: EXIT.auth, code: "state_mismatch" }));
-      return;
-    }
     const error = params.get("error");
     if (error) {
       const denied = error === "access_denied";
@@ -3057,7 +3159,7 @@ async function saveLogin(ctx, profile, session, extra) {
     api: session.api,
     flow: extra.flow,
     workspace: workspace ? { name: workspace.name, slug: workspace.slug } : void 0,
-    user: me ? { name: me.user.name, email: me.user.email, role: me.user.role } : void 0,
+    user: me ? { name: me.user.name, role: me.user.role } : void 0,
     scopes,
     storage: saved.storage,
     renews: canRefresh(session)
@@ -3228,7 +3330,8 @@ var init_auth = __esm({
         api: ctx.apiUrl,
         login: login2,
         workspace: me.workspace,
-        user: me.user,
+        // Never the email, even from an older server that still sends it.
+        user: { id: me.user.id, name: me.user.name, role: me.user.role },
         token: { name: me.token.name, scopes: me.token.scopes },
         ...me.subscription ? { subscription: me.subscription } : {},
         ...me.usage ? { usage: me.usage } : {},
@@ -3271,6 +3374,17 @@ function shellQuote2(arg) {
 }
 function claudeCodeCommand(url, scope = "user") {
   return ["claude", ...claudeCodeArgs(url, scope)].map(shellQuote2).join(" ");
+}
+function windowsClaudeSpawn(found, args, comspec = "cmd.exe") {
+  const absolute = (path) => /^[A-Za-z]:\\/.test(path);
+  const exe = found.find((path) => absolute(path) && /\.exe$/i.test(path));
+  if (exe) return { file: exe, args, verbatim: false };
+  const cmd = found.find((path) => absolute(path) && /\.cmd$/i.test(path));
+  if (!cmd) return null;
+  const SAFE_PATH = /^[A-Za-z]:\\[A-Za-z0-9 _.()\\~+,=@{}[\]#$'-]+$/;
+  const SAFE_ARG = /^[A-Za-z0-9_.:/@=+,-]+$/;
+  if (!SAFE_PATH.test(cmd) || !args.every((arg) => SAFE_ARG.test(arg))) return null;
+  return { file: comspec, args: ["/d", "/s", "/c", `""${cmd}" ${args.join(" ")}"`], verbatim: true };
 }
 function codexBlock(url, auth) {
   const lines = [`[mcp_servers.${SERVER_NAME}]`, `url = ${tomlString(url)}`];
@@ -3404,16 +3518,24 @@ __export(setup_exports, {
   commands: () => commands5
 });
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync5 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { dirname, join as join6, resolve as resolve3 } from "node:path";
-function onPath2(command) {
-  return spawnSync2(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" }).status === 0;
+import { copyFileSync, existsSync as existsSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { dirname as dirname2, join as join7, resolve as resolve3 } from "node:path";
+function system32(tool) {
+  return join7(process.env.SystemRoot || "C:\\Windows", "System32", tool);
+}
+function findClaude() {
+  const win = process.platform === "win32";
+  const result = spawnSync2(win ? system32("where.exe") : "which", ["claude"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  if (result.status !== 0) return [];
+  const paths = (result.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return win ? paths.filter((path) => dirname2(path).toLowerCase() !== resolve3(process.cwd()).toLowerCase()) : paths;
 }
 function connectClaudeCode(url, opts) {
   const command = claudeCodeCommand(url, opts.scope);
   const after = "Then the user runs /mcp inside Claude Code and chooses homebase \u2192 Authenticate to approve the workspace in the browser (over SSH or headless: `claude mcp login homebase --no-browser`, then paste the redirect URL back). The Homebase plugin bundles this plus the skill: claude plugin install homebase@homebase.";
-  const hasClaude = onPath2("claude");
+  const found = findClaude();
+  const hasClaude = found.length > 0;
   if (!opts.write || !hasClaude) {
     return {
       client: "claude-code",
@@ -3424,15 +3546,27 @@ function connectClaudeCode(url, opts) {
       next_step: hasClaude ? `Show the user the command; only if they agree, rerun with --write (or they run it). ${after}` : `Install Claude Code, then run: ${command}. ${after}`
     };
   }
-  const result = spawnSync2("claude", claudeCodeArgs(url, opts.scope), { encoding: "utf8" });
+  const args = claudeCodeArgs(url, opts.scope);
+  const spawn2 = process.platform === "win32" ? windowsClaudeSpawn(found, args, system32("cmd.exe")) : { file: "claude", args, verbatim: false };
+  if (!spawn2) {
+    return {
+      client: "claude-code",
+      url,
+      applied: false,
+      command,
+      claude_found: true,
+      next_step: `Couldn't run claude safely from here (Windows). The user runs this in a terminal: ${command}. ${after}`
+    };
+  }
+  const result = spawnSync2(spawn2.file, spawn2.args, { encoding: "utf8", windowsVerbatimArguments: spawn2.verbatim });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
   const already = /already exists/i.test(output);
   if (result.status !== 0 && !already) throw new CliError(`claude mcp add failed: ${output}`, { code: "claude_failed", data: { client: "claude-code", url, command, applied: false } });
   return { client: "claude-code", url, applied: !already, alreadyConfigured: already, command, next_step: after };
 }
 function connectCodex(ctx, url, opts) {
-  const codexHome = ctx.env.CODEX_HOME || join6(homedir2(), ".codex");
-  const path = resolve3(ctx.cwd, opts.configPath ?? join6(codexHome, "config.toml"));
+  const codexHome = ctx.env.CODEX_HOME || join7(homedir3(), ".codex");
+  const path = resolve3(ctx.cwd, opts.configPath ?? join7(codexHome, "config.toml"));
   const auth = opts.token ? { kind: "token-env", envVar: opts.tokenEnv } : { kind: "oauth" };
   const block = codexBlock(url, auth);
   const before = existsSync3(path) ? readFileSync5(path, "utf8") : "";
@@ -3442,7 +3576,7 @@ function connectCodex(ctx, url, opts) {
   const base = { client: "codex", url, configPath: path, snippet: block };
   if (!diff) return { ...base, applied: false, alreadyConfigured: true, next_step: next };
   if (!opts.write) return { ...base, applied: false, diff, next_step: `Show the user this diff; only if they agree, rerun with --write. ${next}` };
-  mkdirSync5(dirname(path), { recursive: true });
+  mkdirSync6(dirname2(path), { recursive: true });
   let backup;
   if (before) {
     backup = `${path}.bak`;
@@ -3522,7 +3656,7 @@ var init_setup = __esm({
       } else {
         try {
           const me = await ctx.api.get("/v1/me");
-          checks.push({ name: "token", status: "ok", detail: `\u201C${me.token.name}\u201D for ${me.workspace.name} (${me.user.email ?? me.user.name ?? "?"}, ${me.user.role ?? "?"}) from ${ctx.tokenSource === "env" ? "HOMEBASE_TOKEN" : `profile ${ctx.profile}`}` });
+          checks.push({ name: "token", status: "ok", detail: `\u201C${me.token.name}\u201D for ${me.workspace.name} (${me.user.name || "?"}, ${me.user.role ?? "?"}) from ${ctx.tokenSource === "env" ? "HOMEBASE_TOKEN" : `profile ${ctx.profile}`}` });
           const missing = ALL_SCOPES.filter((scope) => !me.token.scopes.includes(scope));
           checks.push({
             name: "permissions",

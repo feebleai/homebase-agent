@@ -3,8 +3,17 @@
   "name": "homebase",
   "version": "0.1.0",
   "description": "Homebase, your team's asset library: find, fetch, upload, tag and organise brand and campaign assets from your agent.",
-  "author": { "name": "Feeble" },
-  "keywords": ["assets", "brand", "dam", "library", "marketing", "files"],
+  "author": {
+    "name": "Feeble"
+  },
+  "keywords": [
+    "assets",
+    "brand",
+    "dam",
+    "library",
+    "marketing",
+    "files"
+  ],
   "extensions": {
     "com.openai": {
       "interface": {
@@ -13,13 +22,25 @@
         "longDescription": "Search your Homebase workspace in plain words (\"latest files from the summer campaign\"), look at previews, get download links, upload and tag new assets, and organise them into buckets for client handoffs. Uses the Homebase MCP server, or the bundled homebase CLI when only a shell is available. Deletes always show a preview and wait for your yes; nothing is ever sent to clients.",
         "developerName": "Feeble",
         "category": "Productivity",
-        "capabilities": ["Read", "Write"],
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
         "defaultPrompt": [
           "Find the latest files from the summer campaign in Homebase",
           "Upload ./exports to Homebase, tagged final, into the Acme bucket",
           "What logo files do we have for Acme?"
-        ]
+        ],
+        "websiteURL": "https://homebase-delta-seven.vercel.app",
+        "privacyPolicyURL": "https://homebase-delta-seven.vercel.app/privacy",
+        "termsOfServiceURL": "https://homebase-delta-seven.vercel.app/terms",
+        "brandColor": "#3B82F6",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/logo.png"
       }
     }
-  }
+  },
+  "homepage": "https://homebase-delta-seven.vercel.app",
+  "repository": "https://github.com/feebleai/homebase-agent",
+  "license": "MIT"
 }
