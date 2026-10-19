@@ -2,6 +2,13 @@
 
 The Homebase CLI (`homebase-cli` on npm), the Homebase plugin and the skill share one version. Each release is tagged `v<version>` in this repo and published to npm under the same version.
 
+## 0.1.1
+
+- **CLI**: waits out the per-minute rate limit and keeps going (up to 60 seconds a wait, 30 waits a request), so large uploads finish instead of stopping partway.
+- **Skill**: in Claude Code and Codex, the agent checks the CLI sign-in at the start of the first Homebase task and tells you right away if it's missing, instead of only when an upload fails.
+- **Skill**: on a per-minute `rate_limited`, wait and re-run the same command once; uploads skip files already in Homebase.
+- **Plugin README and docs**: privacy section lists every network destination, what is sent, and what is stored on your computer.
+
 ## 0.1.0
 
 First public release.

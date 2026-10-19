@@ -2,6 +2,7 @@
 name: homebase
 description: The team's Homebase library (Homebase is the team's shared asset library). Use whenever the user names Homebase, refers to their Homebase library, workspace or buckets, or asks to find, show, save, upload, tag, share or organise assets in Homebase, such as images, photos, logos, banners, hero shots, decks, PDFs, videos and campaign files kept there ("find our logo in Homebase", "show me the hero image from the spring launch bucket", "what does our logo look like in the library", "the latest files from the summer campaign in Homebase", "get the client a share link for the Q3 report bucket"). Also for deleting or restoring Homebase assets. Not for files on disk or general image work unless the user means Homebase. Uses the Homebase MCP tools when connected, otherwise the homebase CLI.
 license: MIT
+allowed-tools: Bash(node *homebase.mjs" whoami), Bash(node *homebase.mjs whoami), Bash(homebase whoami)
 ---
 
 # Homebase
@@ -22,7 +23,7 @@ The team's asset library. Every asset (file, link or embed) is one record with a
 | **upload local files** | **CLI**: `homebase upload <files…> --bucket "<name>" --tag <t>` is one call (MCP needs three per file) |
 | download to disk | CLI only: `homebase download <id…> -o <dir>` |
 
-The CLI: in the Claude Code plugin, run the bundled copy, `node "${CLAUDE_PLUGIN_ROOT}/skills/homebase/scripts/homebase.mjs" …`; elsewhere `homebase …` if it's installed, else `node <this skill's folder>/scripts/homebase.mjs …`. Run one plain command per call: no `command -v` checks, `&&`/`||` chains or pipes (they cost extra approvals). Never `npx` an unknown package. It prints one JSON document per call (`"ok": true|false`); `homebase <cmd> --help` is the reference. Exit 3 means the CLI isn't logged in. The CLI has its own login, separate from the MCP connection, so tell the user in one line: "Uploading files from this computer uses the Homebase CLI, which needs its own one-time sign-in. I'll open Homebase in your browser to approve it." Then run `homebase login`, relay `verification_url`, wait for `logged_in`, and retry the command once. MCP tools may be deferred: look for `homebase`/`search_assets` in your tool search first. Details: [references/cli.md](references/cli.md), [references/mcp-tools.md](references/mcp-tools.md).
+The CLI: in the Claude Code plugin, run the bundled copy, `node "${CLAUDE_PLUGIN_ROOT}/skills/homebase/scripts/homebase.mjs" …`; elsewhere `homebase …` if it's installed, else `node <this skill's folder>/scripts/homebase.mjs …`. Run one plain command per call: no `command -v` checks, `&&`/`||` chains or pipes (they cost extra approvals). Never `npx` an unknown package. It prints one JSON document per call (`"ok": true|false`); `homebase <cmd> --help` is the reference. The CLI has its own login, separate from the MCP connection. **With a shell, run `homebase whoami` once at the start of the first Homebase task in a conversation.** If it fails with exit 3 (`not_logged_in`), tell the user right away, in one line before anything else: "Heads up: the Homebase CLI on this computer isn't signed in, so I can search and organise but can't upload or download files. Want me to sign it in now? It's one approval in your browser (or run `/homebase:connect`)." Then carry on with the task through the MCP tools if they can do it. When the user agrees, or a later command needs the CLI and exits 3, run `homebase login`, relay `verification_url`, wait for `logged_in`, and retry the command once. Don't check again later in the conversation. MCP tools may be deferred: look for `homebase`/`search_assets` in your tool search first. Details: [references/cli.md](references/cli.md), [references/mcp-tools.md](references/mcp-tools.md).
 
 ## 2. Find and look
 
@@ -69,6 +70,7 @@ Follow `error.message`; it's written for you.
 
 | Exit / code | Do |
 |---|---|
+| 4 / `rate_limited` (per minute) | The CLI already waited it out as long as it could. Wait `retry_after_s`, then run the same command once more: uploads skip files that are already in Homebase. |
 | 4 / `limit_reached`, `subscription_required` | **Stop. Don't retry or work around it.** Tell the user the message and when it resets (`resets_at`, in their local time), plus the Settings link if present (`upgrade_url` from the CLI, `settings_url` over MCP). |
 | 3 / `unauthorized`, `token_expired`, `login_expired` | MCP: ask the user to reconnect Homebase in their app. CLI: say the CLI needs its own sign-in (separate from the MCP connection), run `homebase login` and relay the link. |
 | 3 / `insufficient_scope` | Don't retry. Tell the user which permission (`missing_scopes`) to grant in Settings → Agents. |

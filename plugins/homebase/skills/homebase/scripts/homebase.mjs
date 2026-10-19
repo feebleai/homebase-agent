@@ -112,7 +112,7 @@ var init_errors = __esm({
 function mcpUrl(api) {
   return `${api.replace(/\/+$/, "")}/mcp`;
 }
-var DEFAULT_API_URL, WEBSITE_URL, DEFAULT_CLIENT_ID, REFRESH_SKEW_MS, REFRESH_TIMEOUT_MS, LOGIN_TIMEOUT_MS, CLI_VERSION, CLIENT_NAME, USER_AGENT, KEYCHAIN_SERVICE, ALL_SCOPES, SEARCH_LIMIT_MAX, SEARCH_LIMIT_DEFAULT, BROWSE_LIMIT_DEFAULT, PAGE_LIMIT_MAX, BUCKETS_LIMIT_DEFAULT, BUCKET_ASSETS_LIMIT_DEFAULT, DELETED_LIMIT_DEFAULT, MAX_AUTO_RETRY_S;
+var DEFAULT_API_URL, WEBSITE_URL, DEFAULT_CLIENT_ID, REFRESH_SKEW_MS, REFRESH_TIMEOUT_MS, LOGIN_TIMEOUT_MS, CLI_VERSION, CLIENT_NAME, USER_AGENT, KEYCHAIN_SERVICE, ALL_SCOPES, SEARCH_LIMIT_MAX, SEARCH_LIMIT_DEFAULT, BROWSE_LIMIT_DEFAULT, PAGE_LIMIT_MAX, BUCKETS_LIMIT_DEFAULT, BUCKET_ASSETS_LIMIT_DEFAULT, DELETED_LIMIT_DEFAULT, MAX_AUTO_RETRY_S, MAX_RATE_WAITS;
 var init_constants = __esm({
   "src/constants.ts"() {
     "use strict";
@@ -122,7 +122,7 @@ var init_constants = __esm({
     REFRESH_SKEW_MS = 5 * 60 * 1e3;
     REFRESH_TIMEOUT_MS = 30 * 1e3;
     LOGIN_TIMEOUT_MS = 10 * 60 * 1e3;
-    CLI_VERSION = "0.1.0";
+    CLI_VERSION = "0.1.1";
     CLIENT_NAME = "Homebase CLI";
     USER_AGENT = `homebase-cli/${CLI_VERSION} (node ${process.version}; ${process.platform})`;
     KEYCHAIN_SERVICE = "homebase-cli";
@@ -134,7 +134,8 @@ var init_constants = __esm({
     BUCKETS_LIMIT_DEFAULT = 100;
     BUCKET_ASSETS_LIMIT_DEFAULT = 50;
     DELETED_LIMIT_DEFAULT = 50;
-    MAX_AUTO_RETRY_S = 10;
+    MAX_AUTO_RETRY_S = 60;
+    MAX_RATE_WAITS = 30;
   }
 });
 
@@ -2837,7 +2838,7 @@ var init_api = __esm({
             }
           }
           const wait = error.server?.retry_after_s ?? Number(response.headers.get("Retry-After") ?? NaN);
-          if (response.status === 429 && error.code === "rate_limited" && attempt < 2 && Number.isFinite(wait) && wait <= MAX_AUTO_RETRY_S) {
+          if (response.status === 429 && error.code === "rate_limited" && attempt < MAX_RATE_WAITS && Number.isFinite(wait) && wait <= MAX_AUTO_RETRY_S) {
             this.onWait?.(wait, error.message);
             await this.sleep(Math.max(1, wait) * 1e3);
             continue;

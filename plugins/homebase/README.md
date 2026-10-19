@@ -2,7 +2,7 @@
 
 Homebase is your team's asset library: images, videos, PDFs, documents, links and design embeds, organised into buckets (a campaign, a client, a project). This plugin lets Claude Code, Codex and Cursor find, preview, download, upload, tag and organise those assets for you, in your own words ("the latest files from the summer campaign").
 
-Version 0.1.0 · [Website](https://homebase-delta-seven.vercel.app) · [Docs](https://homebase-delta-seven.vercel.app/docs/agents) · [Support](https://homebase-delta-seven.vercel.app/support) · [Privacy](https://homebase-delta-seven.vercel.app/privacy) · [Terms](https://homebase-delta-seven.vercel.app/terms)
+Version 0.1.1 · [Website](https://homebase-delta-seven.vercel.app) · [Docs](https://homebase-delta-seven.vercel.app/docs/agents) · [Support](https://homebase-delta-seven.vercel.app/support) · [Privacy](https://homebase-delta-seven.vercel.app/privacy) · [Terms](https://homebase-delta-seven.vercel.app/terms)
 
 ## What you get
 
@@ -22,7 +22,7 @@ Version 0.1.0 · [Website](https://homebase-delta-seven.vercel.app) · [Docs](ht
 Then connect your workspace. The plugin connects twice: the MCP connection (search, buckets, tags) and the CLI login (uploading and downloading files on your computer). Each opens Homebase in your browser, where you pick the workspace and the permissions.
 
 - **MCP server**: in Claude Code, `/mcp` → homebase → Authenticate; in Codex, `codex mcp login homebase`.
-- **CLI**: in Claude Code, run `/homebase:connect`; in Codex, ask it to "log in to the Homebase CLI". Either runs the bundled CLI's `homebase login`. If you skip this, the agent asks the first time you upload.
+- **CLI**: in Claude Code, run `/homebase:connect`; in Codex, ask it to "log in to the Homebase CLI". Either runs the bundled CLI's `homebase login`. If you skip this, the agent tells you as soon as you start a Homebase task and can sign you in then.
 
 ## Permissions
 

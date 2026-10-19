@@ -9,7 +9,7 @@
       "name": "homebase",
       "source": "./plugins/homebase",
       "description": "Find, fetch, upload and organise your team's assets in Homebase.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "productivity",
       "keywords": [
         "assets",
