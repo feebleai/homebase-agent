@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "homebase",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Homebase, your team's asset library: find, fetch, upload, tag and organise brand and campaign assets from your agent.",
   "author": {
     "name": "Feeble"

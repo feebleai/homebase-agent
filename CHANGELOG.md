@@ -2,6 +2,12 @@
 
 The Homebase CLI (`homebase-cli` on npm), the Homebase plugin and the skill share one version. Each release is tagged `v<version>` in this repo and published to npm under the same version.
 
+## 0.1.2
+
+- **Skill and MCP**: before creative or media work (creatives, ads, posts, generated images or video) the agent checks Homebase for the brand's references first and says which it used.
+- **Skill and MCP**: when uploading files of a recurring subject Homebase doesn't know by name (a mascot), the agent asks its name once and tags the files with it.
+- **Tags**: AI indexing now tags assets itself; those tags show with a sparkle and removing one keeps it off.
+
 ## 0.1.1
 
 - **CLI**: waits out the per-minute rate limit and keeps going (up to 60 seconds a wait, 30 waits a request), so large uploads finish instead of stopping partway.

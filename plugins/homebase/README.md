@@ -2,7 +2,7 @@
 
 Homebase is your team's asset library: images, videos, PDFs, documents, links and design embeds, organised into buckets (a campaign, a client, a project). This plugin lets Claude Code, Codex and Cursor find, preview, download, upload, tag and organise those assets for you, in your own words ("the latest files from the summer campaign").
 
-Version 0.1.1 · [Website](https://homebase-delta-seven.vercel.app) · [Docs](https://homebase-delta-seven.vercel.app/docs/agents) · [Support](https://homebase-delta-seven.vercel.app/support) · [Privacy](https://homebase-delta-seven.vercel.app/privacy) · [Terms](https://homebase-delta-seven.vercel.app/terms)
+Version 0.1.2 · [Website](https://homebase-delta-seven.vercel.app) · [Docs](https://homebase-delta-seven.vercel.app/docs/agents) · [Support](https://homebase-delta-seven.vercel.app/support) · [Privacy](https://homebase-delta-seven.vercel.app/privacy) · [Terms](https://homebase-delta-seven.vercel.app/terms)
 
 ## What you get
 

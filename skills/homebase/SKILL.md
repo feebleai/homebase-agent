@@ -1,6 +1,6 @@
 ---
 name: homebase
-description: The team's Homebase library (Homebase is the team's shared asset library). Use whenever the user names Homebase, refers to their Homebase library, workspace or buckets, or asks to find, show, save, upload, tag, share or organise assets in Homebase, such as images, photos, logos, banners, hero shots, decks, PDFs, videos and campaign files kept there ("find our logo in Homebase", "show me the hero image from the spring launch bucket", "what does our logo look like in the library", "the latest files from the summer campaign in Homebase", "get the client a share link for the Q3 report bucket"). Also for deleting or restoring Homebase assets. Not for files on disk or general image work unless the user means Homebase. Uses the Homebase MCP tools when connected, otherwise the homebase CLI.
+description: The team's Homebase library (Homebase is the team's shared asset library). Use whenever the user names Homebase, refers to their Homebase library, workspace or buckets, or asks to find, show, save, upload, tag, share or organise assets in Homebase, such as images, photos, logos, banners, hero shots, decks, PDFs, videos and campaign files kept there ("find our logo in Homebase", "show me the hero image from the spring launch bucket", "what does our logo look like in the library", "the latest files from the summer campaign in Homebase", "get the client a share link for the Q3 report bucket"). Also before creative or media work (creatives, ads, social posts, banners, decks, generating images or video) to pull the brand's logo, mascot, products and past work from Homebase. Also for deleting or restoring Homebase assets. Uses the Homebase MCP tools when connected, otherwise the homebase CLI.
 license: MIT
 allowed-tools: Bash(node *homebase.mjs" whoami), Bash(node *homebase.mjs whoami), Bash(homebase whoami)
 ---
@@ -10,6 +10,10 @@ allowed-tools: Bash(node *homebase.mjs" whoami), Bash(node *homebase.mjs whoami)
 The team's asset library. Every asset (file, link or embed) is one record with a title, tags, versions, and an AI description, AI tags and visible text. **Buckets** are campaigns or client handoffs; one asset can be in many (linked, not copied), and a bucket can have a client share page. Deleted assets stay in **Recently deleted** for 30 days.
 
 "Latest" means the newest version date (`latestAt`). When the user asks for "the hero image" or "the summer files", they mean Homebase, not this computer: don't search the local disk.
+
+## Creative work: check Homebase first
+
+When the user asks to make or generate something visual (creatives, ads, posts, banners, decks, mockups, images, video), the team's references are likely in Homebase. Before starting, search once for what the piece needs: the subject by name ("Devi mascot"), the logo, brand colours, a past campaign. View the best two or three and build from them, and say in one line which assets you used. If nothing fits, carry on without; don't ask the user to upload first.
 
 ## 1. Pick the interface
 
@@ -39,7 +43,8 @@ The CLI: in the Claude Code plugin, run the bundled copy, `node "${CLAUDE_PLUGIN
 - **Upload** (shell): `homebase upload <files…> [--bucket "<name>"] [--tag <t>]` (`-r` for folders). Don't use `curl`. Only if there's a shell but no CLI: `create_upload`, the `curl` it returns, then `finish_upload`.
 - **Without a shell**, local files can't be sent: if the file is online use `import_from_url` (`homebase import <url>`); otherwise ask the user to upload it in the web app.
 - **Duplicates**: a `duplicate_of` means the file is already in the library. Tell the user and offer to tag it or add it to the bucket instead (the `hint` has the commands). A second copy (`--allow-duplicate`) only if they ask.
-- **Tag**: short, lowercase (client, campaign, use, status). Reuse existing tags; don't tag colours or objects.
+- **Name new subjects**: before uploading a batch of images, look at one or two of them. If they show a recurring subject Homebase may not know by name (a mascot, character, product, person), ask the user once: "These look like a mascot. What's its name, and should I tag them that way?" Then upload with those tags (`mascot`, `devi`) and, if the user agrees, clear titles. Search finds assets by these names, and indexing uses them in descriptions. Offer to tag earlier uploads of the same subject too.
+- **Tag**: short, lowercase (client, campaign, use, status, a named subject). Reuse existing tags; AI indexing already tags what's visible, so don't add colour or object tags.
 - **Rename** only when the user asks or agrees. If a title is meaningless ("IMG_2041"), suggest one and ask.
 - **Buckets**: `upload`, `import` and `bucket add` check the bucket name themselves (a wrong one fails with `bucket_not_found` and changes nothing), so don't list buckets first. Before creating one, check it doesn't exist; ask before creating one the user didn't name. Removing from a bucket keeps the asset in the library.
 - At most 50 ids per call. Video can't be uploaded through the API yet: send the user to the web app.
