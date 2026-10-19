@@ -47,7 +47,7 @@ The CLI: in the Claude Code plugin, run the bundled copy, `node "${CLAUDE_PLUGIN
 - **Tag**: short, lowercase (client, campaign, use, status, a named subject). Reuse existing tags; AI indexing already tags what's visible, so don't add colour or object tags.
 - **Rename** only when the user asks or agrees. If a title is meaningless ("IMG_2041"), suggest one and ask.
 - **Buckets**: `upload`, `import` and `bucket add` check the bucket name themselves (a wrong one fails with `bucket_not_found` and changes nothing), so don't list buckets first. Before creating one, check it doesn't exist; ask before creating one the user didn't name. Removing from a bucket keeps the asset in the library.
-- At most 50 ids per call. Video can't be uploaded through the API yet: send the user to the web app.
+- At most 50 ids per call. Videos (MP4, MOV, M4V, WebM, up to 500 MB) upload like any other file. They aren't AI-indexed yet, so search finds them only by title and tags: give them a clear title and tags.
 
 ## 4. Deleting (always two turns)
 

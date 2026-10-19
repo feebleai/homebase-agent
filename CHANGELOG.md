@@ -2,6 +2,11 @@
 
 The Homebase CLI (`homebase-cli` on npm), the Homebase plugin and the skill share one version. Each release is tagged `v<version>` in this repo and published to npm under the same version.
 
+## 0.1.3
+
+- **Videos**: MP4, MOV, M4V and WebM videos up to 500 MB now upload like any other file, from the web app, `homebase upload`, and the MCP `create_upload`/`finish_upload` tools, and play in the browser. They aren't AI-indexed yet, so search finds them by title and tags.
+- **Skill and MCP**: no longer send the user to the web app for videos; agents give videos a clear title and tags instead.
+
 ## 0.1.2
 
 - **Skill and MCP**: before creative or media work (creatives, ads, posts, generated images or video) the agent checks Homebase for the brand's references first and says which it used.

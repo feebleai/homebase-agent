@@ -29,7 +29,7 @@ You don't need `get_asset` to list titles, types, dates or tags: `search_assets`
 | Tool | What it does | CLI equivalent |
 |---|---|---|
 | `create_upload` / `finish_upload` | Last resort: a shell but no homebase CLI (see below) | `homebase upload` (one call, preferred) |
-| `import_from_url` | Adds a public https URL. Images, PDFs and documents are fetched and stored like uploads; pages become links. Optional `title`, `bucketIds`, `tags` | `homebase import <url>` |
+| `import_from_url` | Adds a public https URL. Images, videos, PDFs and documents (up to 30 MB) are fetched and stored like uploads; pages become links. Optional `title`, `bucketIds`, `tags` | `homebase import <url>` |
 | `tag_assets` | Adds tags (`tags`) to up to 50 assets | `homebase tag --add` |
 | `untag_assets` | Removes tags (`tags`) from up to 50 assets. Marked destructive, so clients ask first | `homebase tag --remove` |
 | `rename_asset` | Renames one asset. Only when the user asks or agrees | `homebase rename` |

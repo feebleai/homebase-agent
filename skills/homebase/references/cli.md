@@ -55,7 +55,7 @@ Item = `{id,title,type,buckets:[name],latestAt,tags}`. A bucket argument is an i
 | `deleted [--limit] [--cursor]` | assets:delete | `{assets:[{id,title,type,deletedAt,purgeAt,buckets}],nextCursor?}` |
 | `restore <id…>` | assets:delete (owner/admin) | `{restored,notFound}` |
 
-Upload limits: images up to 50 MB, documents and other files up to 200 MB. Video isn't accepted through the API yet.
+Upload limits: images up to 50 MB, videos (MP4, MOV, M4V, WebM) up to 500 MB, documents and other files up to 200 MB. Videos aren't AI-indexed yet: search finds them by title and tags.
 
 ### delete: two calls, always
 
