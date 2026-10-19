@@ -1,6 +1,6 @@
 ---
 name: homebase
-description: The team's shared asset library (Homebase). Use whenever the user asks to see, show, find, describe, get, upload, tag, share or send images, photos, pictures, banners, hero shots or hero images, logos, brand assets, decks, PDFs, videos or campaign files ("show me the hero image", "what does our logo look like", "find the latest files from the summer campaign", "send the summer files to the client"), mentions "our files", "our assets", "the library" or "the client", or names Homebase. These files live in Homebase, not in the local repo or disk, even when a local file has a similar name. Also for organising assets into buckets (campaigns, client handoffs), deleting or restoring them. Uses the Homebase MCP tools when connected, otherwise the homebase CLI.
+description: The team's Homebase library (Homebase is the team's shared asset library). Use whenever the user names Homebase, refers to their Homebase library, workspace or buckets, or asks to find, show, save, upload, tag, share or organise assets in Homebase, such as images, photos, logos, banners, hero shots, decks, PDFs, videos and campaign files kept there ("find our logo in Homebase", "show me the hero image from the spring launch bucket", "what does our logo look like in the library", "the latest files from the summer campaign in Homebase", "get the client a share link for the Q3 report bucket"). Also for deleting or restoring Homebase assets. Not for files on disk or general image work unless the user means Homebase. Uses the Homebase MCP tools when connected, otherwise the homebase CLI.
 license: MIT
 ---
 
@@ -22,7 +22,7 @@ The team's asset library. Every asset (file, link or embed) is one record with a
 | **upload local files** | **CLI**: `homebase upload <files…> --bucket "<name>" --tag <t>` is one call (MCP needs three per file) |
 | download to disk | CLI only: `homebase download <id…> -o <dir>` |
 
-The CLI: in the Claude Code plugin, run the bundled copy, `node "${CLAUDE_PLUGIN_ROOT}/skills/homebase/scripts/homebase.mjs" …`; elsewhere `homebase …` if it's installed, else `node <this skill's folder>/scripts/homebase.mjs …`. Run one plain command per call: no `command -v` checks, `&&`/`||` chains or pipes (they cost extra approvals). Never `npx` an unknown package. It prints one JSON document per call (`"ok": true|false`); `homebase <cmd> --help` is the reference. Exit 3 means it isn't logged in: run `homebase login`, relay `verification_url` to the user, and let them approve in the browser. MCP tools may be deferred: look for `homebase`/`search_assets` in your tool search first. Details: [references/cli.md](references/cli.md), [references/mcp-tools.md](references/mcp-tools.md).
+The CLI: in the Claude Code plugin, run the bundled copy, `node "${CLAUDE_PLUGIN_ROOT}/skills/homebase/scripts/homebase.mjs" …`; elsewhere `homebase …` if it's installed, else `node <this skill's folder>/scripts/homebase.mjs …`. Run one plain command per call: no `command -v` checks, `&&`/`||` chains or pipes (they cost extra approvals). Never `npx` an unknown package. It prints one JSON document per call (`"ok": true|false`); `homebase <cmd> --help` is the reference. Exit 3 means the CLI isn't logged in. The CLI has its own login, separate from the MCP connection, so tell the user in one line: "Uploading files from this computer uses the Homebase CLI, which needs its own one-time sign-in. I'll open Homebase in your browser to approve it." Then run `homebase login`, relay `verification_url`, wait for `logged_in`, and retry the command once. MCP tools may be deferred: look for `homebase`/`search_assets` in your tool search first. Details: [references/cli.md](references/cli.md), [references/mcp-tools.md](references/mcp-tools.md).
 
 ## 2. Find and look
 
@@ -30,6 +30,7 @@ The CLI: in the Claude Code plugin, run the bundled copy, `node "${CLAUDE_PLUGIN
 - **Read `interpretation` first** and tell the user in one line how it was read. If it's wrong, search again with clearer words or a filter (`--type`, `--bucket`, `--tag`, `--source`).
 - **Groups** come in order: `bucket`, `also` ("Also from Summer 2026"), `results`. Present them in that order, labelled. Page with `nextCursor`.
 - Results already carry titles, types, dates, tags and buckets: listing them needs nothing else. Look at an asset (`view_asset` / `homebase view`) or read it (`get_asset` / `homebase get`) only before you describe what it shows or says. Never invent contents. With words, `homebase view` shows the top match and lists `alternatives`: say which one you showed.
+- **"Which/all/every" questions** ("which images show people?"): search once and answer from the results. Broad words already match related ones (`notes` say which), and each result's description says what it shows, so don't list the whole library or open every preview to double-check. Do that only if the user explicitly asks for an exhaustive check.
 - No match: say so and suggest a broader phrasing.
 
 ## 3. Add and organise
@@ -68,8 +69,8 @@ Follow `error.message`; it's written for you.
 
 | Exit / code | Do |
 |---|---|
-| 4 / `limit_reached`, `subscription_required` | **Stop. Don't retry or work around it.** Tell the user the message and when it resets (`resets_at`, in their local time), plus `upgrade_url` if present. |
-| 3 / `unauthorized`, `token_expired`, `login_expired` | MCP: ask the user to reconnect Homebase in their app. CLI: run `homebase login` and relay the link. |
+| 4 / `limit_reached`, `subscription_required` | **Stop. Don't retry or work around it.** Tell the user the message and when it resets (`resets_at`, in their local time), plus the Settings link if present (`upgrade_url` from the CLI, `settings_url` over MCP). |
+| 3 / `unauthorized`, `token_expired`, `login_expired` | MCP: ask the user to reconnect Homebase in their app. CLI: say the CLI needs its own sign-in (separate from the MCP connection), run `homebase login` and relay the link. |
 | 3 / `insufficient_scope` | Don't retry. Tell the user which permission (`missing_scopes`) to grant in Settings → Agents. |
 | 6 / `confirmation_required` | Expected after a delete preview: section 4. |
 | 5 / `not_found`, `no_match` | Stale id or nothing found: search again. |

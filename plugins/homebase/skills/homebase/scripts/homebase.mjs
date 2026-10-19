@@ -3470,19 +3470,21 @@ function clickPath(client, url) {
     case "claude-desktop":
     case "claude-ai":
       return [
-        `${client === "claude-ai" ? "On claude.ai" : "In Claude Desktop"}, open Customize \u2192 Connectors, click +, then \u201CAdd custom connector\u201D.`,
-        `Name: Homebase   URL: ${url}   Authentication: sign in (OAuth, \u201CUse Claude's published identity\u201D).`,
-        "Click Add, then Connect, and approve the workspace and permissions in the Homebase window.",
-        "In a chat, turn Homebase on from the tools menu. The connector also works in Desktop, Cowork and mobile.",
+        `${client === "claude-ai" ? "On claude.ai" : "In Claude Desktop"}, open Customize \u2192 Connectors, click Add, then Custom \u2192 Web.`,
+        `Name: Homebase   URL: ${url}   Click Continue, keep the detected sign-in settings, then click Add.`,
+        "Click Connect next to Homebase, and approve the workspace and permissions in the Homebase window.",
+        "In a chat, click + (or type /), open Connectors and turn on Homebase. Then ask, e.g. \u201CShow me the latest files from the summer campaign in Homebase\u201D. The connector also works in Desktop, Cowork and mobile.",
         "Team/Enterprise: an Owner first adds it under Organization settings \u2192 Connectors \u2192 Add \u2192 Custom \u2192 Web; members then click Connect.",
         "Recommended: add the Homebase skill (agent/dist/homebase-skill.zip from `npm run build:agent`) under Customize \u2192 Skills."
       ];
     case "chatgpt":
       return [
-        "Open chatgpt.com/plugins, click +, then \u201CCreate custom MCP server\u201D. If that option is missing, turn on Developer mode first: Settings \u2192 Apps \u2192 Advanced settings (on Business/Enterprise/Edu an admin must allow it in workspace settings).",
-        `Name: Homebase   Description: Team asset library   URL: ${url}   Authentication: OAuth.`,
-        "Accept the risk notice, create it, then approve the workspace and permissions in the Homebase window.",
-        "In a chat, enable Homebase from the + menu. Plans: Plus, Pro, Business, Enterprise, Edu.",
+        "Who can add it: on ChatGPT Business, workspace owners and admins; on Enterprise/Edu, owners, admins and members an admin allows. Pro can add it, but read-only (search and view, no uploads or changes). OpenAI doesn't list Free or Plus. Can't add it? Use Claude, Codex or the Homebase web app.",
+        "On chatgpt.com (web only), open Plugins, click +, then \u201CAdd custom MCP server\u201D. No Developer mode needed.",
+        `Name: Homebase   Connection: ${url}   Authentication: OAuth.`,
+        "Tick \u201CI understand and want to continue\u201D, click \u201CCreate as a plugin\u201D, then install the plugin and approve the workspace and permissions in the Homebase window.",
+        "In a new chat, type @, pick Homebase and ask, e.g. \u201CShow me the latest files from the summer campaign\u201D. Type @Homebase again when a follow-up needs new files.",
+        "Business/Enterprise/Edu: an admin then publishes it for the workspace from workspace settings; each member connects with their own Homebase login.",
         "Optional: upload the Homebase skill zip under Skills \u2192 Create \u2192 Upload from your computer."
       ];
   }

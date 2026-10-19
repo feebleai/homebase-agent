@@ -2,6 +2,8 @@
 
 These steps are for the user. An agent can run the CLI parts once the user agrees, but a person approves every login in the browser, and picks the workspace and permissions there.
 
+The Claude Code and Codex plugins connect twice: the MCP connection (search, buckets, tags) and the CLI login (uploading and downloading local files). Set up both at install time: authenticate the MCP server as below, then sign in the CLI with `/homebase:connect` (Claude Code) or `homebase login` from the bundled copy (Codex). Each is one approval in the browser.
+
 The MCP server is at `<api>/mcp` (today `https://next-caribou-11.convex.site/mcp`). `homebase connect <client>` returns the steps below as JSON, and applies them with `--write` once the user agrees.
 
 ## Claude
@@ -9,7 +11,7 @@ The MCP server is at `<api>/mcp` (today `https://next-caribou-11.convex.site/mcp
 | Client | Setup |
 |---|---|
 | **Claude Code** | Install the plugin: `claude plugin marketplace add feebleai/homebase-agent`, then `claude plugin install homebase@homebase`. It brings this skill, the MCP server, the `/homebase:*` commands and a bundled copy of the CLI (no global install needed). Then run `/mcp`, pick **homebase** and choose **Authenticate**. Over SSH or headless: `claude mcp login plugin:homebase:homebase --no-browser`, open the printed link on any machine, approve, and paste the redirect URL back. Without the plugin: `claude mcp add --transport http --scope user homebase <url>` (what `homebase connect claude-code` runs), then `/mcp` or `claude mcp login homebase --no-browser`. For CI, add the server with a Settings key instead: `claude mcp add --transport http --scope user homebase <url> --header "Authorization: Bearer $HOMEBASE_TOKEN"` |
-| **claude.ai / Claude Desktop** | **Customize → Connectors**, then **+** → **Add custom connector**, with the URL. Click **Connect** and approve in the Homebase window. On Team/Enterprise an owner adds it first in the organization's connector settings. Optionally add this skill under **Customize → Skills** (upload `homebase-skill.zip`) |
+| **claude.ai / Claude Desktop** | **Customize → Connectors**, then **Add** → **Custom → Web**, with the URL. Click **Connect** and approve in the Homebase window. Then, in a chat, **+** (or **/**) → **Connectors** → turn on Homebase. On Team/Enterprise an owner adds it first in the organization's connector settings. Free plans allow one custom connector. Optionally add this skill under **Customize → Skills** (upload `homebase-skill.zip`) |
 
 ### Claude Code permissions
 
@@ -30,7 +32,7 @@ Add `Bash(homebase import *)` or `Bash(homebase download *)` when you want those
 | Client | Setup |
 |---|---|
 | **Codex** (CLI and app) | Install the plugin: `codex plugin marketplace add feebleai/homebase-agent`, then `codex plugin add homebase@homebase`. Then `codex mcp login homebase` (OAuth in the browser; add `--no-browser` over SSH and paste the callback URL). Without the plugin: `homebase connect codex` shows a diff adding `[mcp_servers.homebase] url = "…"` to `config.toml`, `homebase connect codex --write` writes it, and then you run `codex mcp login homebase`. `homebase connect codex --token` uses a Settings key from `$HOMEBASE_TOKEN` instead (`bearer_token_env_var`) |
-| **ChatGPT** | Go to **chatgpt.com/plugins**, click **+**, then **Create custom MCP server**: name Homebase, the URL, authentication OAuth. Accept the risk notice, create it, and approve in the Homebase window. Custom MCP servers need **Developer mode**: OpenAI's help center lists it for Business, Enterprise and Edu (an admin allows it in workspace settings; members turn it on in Settings → Apps → Advanced settings). If you don't see **Create custom MCP server**, turn Developer mode on first. The skill can be uploaded under Skills → Create |
+| **ChatGPT** | **Who can add it:** on ChatGPT Business, workspace owners and admins; on Enterprise and Edu, owners, admins and members an admin allows. Pro can add it, but read-only (search and view, no uploads or changes). OpenAI's guide doesn't list Free or Plus: suggest Claude, Codex or the Homebase web app instead. Steps, on chatgpt.com (web only; no Developer mode needed): **Plugins → + → Add custom MCP server**, name Homebase, the URL under **Connection**, authentication OAuth. Tick **I understand and want to continue**, choose **Create as a plugin**, install it and approve in the Homebase window. In a new chat, type **@** and pick Homebase (again for each follow-up that needs new files). On Business, Enterprise and Edu an admin then publishes it for the workspace. The skill can be uploaded under Skills → Create |
 
 ### Codex: headless runs (`codex exec`)
 

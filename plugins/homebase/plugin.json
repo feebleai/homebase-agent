@@ -18,8 +18,8 @@
     "com.openai": {
       "interface": {
         "displayName": "Homebase",
-        "shortDescription": "Your team's asset library: find, fetch and organise brand and campaign files",
-        "longDescription": "Search your Homebase workspace in plain words (\"latest files from the summer campaign\"), look at previews, get download links, upload and tag new assets, and organise them into buckets for client handoffs. Uses the Homebase MCP server, or the bundled homebase CLI when only a shell is available. Deletes always show a preview and wait for your yes; nothing is ever sent to clients.",
+        "shortDescription": "Your team's asset library",
+        "longDescription": "Homebase is an asset library for marketing teams, agencies and the agents they work with. Connect your Homebase workspace to find, look at and organise its images, videos, PDFs, documents, links and design embeds.\n\nWhat you can do:\n- Search in plain words, such as \"latest files from the spring launch\" or \"logo pngs from last week\". Homebase reads bucket names, dates, file types and tags, and says how it understood the question.\n- See an asset's preview, details, version history and a one-hour download link.\n- List buckets (one per campaign, client or project) and what is in them, and get a bucket's client share link to send yourself.\n- Create buckets, add or remove assets, tag and rename assets, and import a file or web page from a public URL.\n- Delete assets after a preview you confirm. Deleted assets go to Recently deleted, where a workspace owner or admin can restore them for 30 days.\n\nLimitations: you need a Homebase account and workspace. ChatGPT can't upload files from your computer; import them from a public URL or upload them in the Homebase web app. Homebase never sends, emails or posts anything to clients. Deleting and restoring need the Delete permission, which only workspace owners and admins can grant when connecting. In Codex, the bundled homebase CLI can also upload local files.",
         "developerName": "Feeble",
         "category": "Productivity",
         "capabilities": [
@@ -27,16 +27,20 @@
           "Write"
         ],
         "defaultPrompt": [
-          "Find the latest files from the summer campaign in Homebase",
-          "Upload ./exports to Homebase, tagged final, into the Acme bucket",
-          "What logo files do we have for Acme?"
+          "Find the latest files from our spring launch in Homebase",
+          "What's in our Brand kit bucket in Homebase?",
+          "Show me our logo from Homebase"
         ],
         "websiteURL": "https://homebase-delta-seven.vercel.app",
         "privacyPolicyURL": "https://homebase-delta-seven.vercel.app/privacy",
         "termsOfServiceURL": "https://homebase-delta-seven.vercel.app/terms",
         "brandColor": "#3B82F6",
         "composerIcon": "./assets/icon.png",
-        "logo": "./assets/logo.png"
+        "logo": "./assets/logo.png",
+        "supportURL": "https://homebase-delta-seven.vercel.app/support"
+      },
+      "publication": {
+        "release_notes": "First directory release. Search the library in plain words, preview assets, get download and share links, organise buckets and tags, import from a public URL, and delete after a confirmed preview (restorable for 30 days)."
       }
     }
   },

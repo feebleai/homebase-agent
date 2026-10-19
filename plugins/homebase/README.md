@@ -15,14 +15,14 @@ Version 0.1.0 · [Website](https://homebase-delta-seven.vercel.app) · [Docs](ht
 
 | Client | How |
 |---|---|
-| Claude Code | `/plugin marketplace add feebleai/homebase-agent`, then `/plugin install homebase@homebase` |
+| Claude Code | `claude plugin marketplace add feebleai/homebase-agent`, then `claude plugin install homebase@homebase` |
 | Codex | `codex plugin marketplace add feebleai/homebase-agent`, then `codex plugin add homebase@homebase` |
 | Cursor | `cursor-agent plugin marketplace add https://github.com/feebleai/homebase-agent` |
 
-Then connect your workspace once:
+Then connect your workspace. The plugin connects twice: the MCP connection (search, buckets, tags) and the CLI login (uploading and downloading files on your computer). Each opens Homebase in your browser, where you pick the workspace and the permissions.
 
-- **MCP server**: in Claude Code, `/mcp` → homebase → Authenticate; in Codex, `codex mcp login homebase`. Your browser opens Homebase, where you pick the workspace and the permissions.
-- **CLI** (for uploads and downloads): `node <plugin>/skills/homebase/scripts/homebase.mjs login`, or `npx -y homebase-cli login`.
+- **MCP server**: in Claude Code, `/mcp` → homebase → Authenticate; in Codex, `codex mcp login homebase`.
+- **CLI**: in Claude Code, run `/homebase:connect`; in Codex, ask it to "log in to the Homebase CLI". Either runs the bundled CLI's `homebase login`. If you skip this, the agent asks the first time you upload.
 
 ## Permissions
 

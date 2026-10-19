@@ -3,7 +3,17 @@
   "mcpServers": {
     "homebase": {
       "type": "streamable-http",
-      "url": "https://next-caribou-11.convex.site/mcp"
+      "url": "https://next-caribou-11.convex.site/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth",
+            "client": {
+              "mode": "cimd"
+            }
+          }
+        }
+      }
     }
   }
 }
